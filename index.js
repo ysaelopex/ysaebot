@@ -65,7 +65,7 @@ const CARGO_AUTOROLE = '1537433971367874610';
 // CANAIS DOS COMANDOS
 // ======================================================
 
-const CANAL_COMANDOS_VIP = '1538611994926514198';
+const CANAL_COMANDOS_VIP = '1538394548848558201';
 
 const CANAL_COMANDOS = '1538394055359340605';
 
@@ -2566,7 +2566,7 @@ const comandos = [
         .setName('protecao')
         .setDescription(
             'Mostra o status da proteção.'
-        ),
+        )
 
     // ==================================================
     // ECONOMIA / DIVERSÃO / UTILIDADES
@@ -3074,7 +3074,7 @@ ${e.message}`, ephemeral: true });
                     return interaction.reply({ content: `💳 **Pagamento via Pix — ${vip.nome}**
 
 Valor: **R$ ${vip.preco.toFixed(2).replace('.', ',')}**
-Chave Pix: 🔑 A chave Pix será enviada manualmente pela equipe depois que um atendente assumir este ticket.
+Chave Pix: \`${🔑 A chave Pix será enviada manualmente pela equipe depois que um atendente assumir este ticket.}\`
 
 Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`vip_aprovar_pix_${chave}`).setLabel('Aprovar Pix (Equipe)').setEmoji('✅').setStyle(ButtonStyle.Success))] });
                 }
