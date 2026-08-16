@@ -2600,7 +2600,7 @@ const comandos = [
     new SlashCommandBuilder()
         .setName('stop')
         .setDescription('Trava o chat atual e impede mensagens de membros sem Administrador.')
-        .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+        .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator),
 
     new SlashCommandBuilder()
         .setName('start')
