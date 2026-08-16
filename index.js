@@ -65,7 +65,7 @@ const CARGO_AUTOROLE = '1537433971367874610';
 // CANAIS DOS COMANDOS
 // ======================================================
 
-const CANAL_COMANDOS_VIP = '1538394548848558201';
+const CANAL_COMANDOS_VIP = '1538611994926514198';
 
 const CANAL_COMANDOS = '1538394055359340605';
 
@@ -2595,17 +2595,7 @@ const comandos = [
     new SlashCommandBuilder().setName('adivinha').setDescription('Tente adivinhar um número de 1 a 10.').addIntegerOption(o => o.setName('palpite').setDescription('Seu palpite').setRequired(true).setMinValue(1).setMaxValue(10)),
     new SlashCommandBuilder().setName('rankingdiversao').setDescription('Mostra o ranking de diversão.'),
 
-    new SlashCommandBuilder().setName('vip-painel').setDescription('Envia/atualiza o painel de compras VIP no canal VIP.'),
-
-    new SlashCommandBuilder()
-        .setName('stop')
-        .setDescription('Trava o chat atual e impede mensagens de membros sem Administrador.')
-        .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator),
-
-    new SlashCommandBuilder()
-        .setName('start')
-        .setDescription('Destrava o chat atual e permite mensagens de todos.')
-        .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator),
+    new SlashCommandBuilder().setName('vip-painel').setDescription('Envia/atualiza o painel de compras VIP no canal VIP.')
 
 ].map(c => c.toJSON());
 
@@ -2756,6 +2746,46 @@ client.on(
                     'Proteção anti-raid: entrada durante ataque.'
                 );
 
+            }
+
+            // ==================================================
+            // CARGO AUTOMÁTICO DE ENTRADA
+            // ==================================================
+
+            try {
+                const cargoAutomatico = await guild.roles.fetch(CARGO_AUTOROLE);
+
+                if (!cargoAutomatico) {
+                    console.log(`❌ Cargo automático ${CARGO_AUTOROLE} não foi encontrado.`);
+                    return;
+                }
+
+                const botMember = guild.members.me;
+
+                if (!botMember) {
+                    console.log('❌ Não foi possível localizar o membro do bot no servidor.');
+                    return;
+                }
+
+                if (cargoAutomatico.position >= botMember.roles.highest.position) {
+                    console.log(`❌ Não posso adicionar o cargo automático ${CARGO_AUTOROLE}: ele está acima ou no mesmo nível do maior cargo do bot.`);
+                    return;
+                }
+
+                if (!member.roles.cache.has(CARGO_AUTOROLE)) {
+                    await member.roles.add(
+                        cargoAutomatico,
+                        'Cargo automático de entrada no servidor.'
+                    );
+
+                    console.log(`✅ Cargo automático ${CARGO_AUTOROLE} adicionado a ${member.user.tag}.`);
+                }
+
+            } catch (erroCargo) {
+                console.log(
+                    `❌ Erro ao adicionar o cargo automático ${CARGO_AUTOROLE} a ${member.user.tag}:`,
+                    erroCargo
+                );
             }
 
         } catch (erro) {
@@ -3084,7 +3114,7 @@ ${e.message}`, ephemeral: true });
                     return interaction.reply({ content: `💳 **Pagamento via Pix — ${vip.nome}**
 
 Valor: **R$ ${vip.preco.toFixed(2).replace('.', ',')}**
-Chave Pix: \`A chave Pix será enviada manualmente pela equipe depois que um atendente assumir este ticket.\`
+Chave Pix: \`${🔑 A chave Pix será enviada manualmente pela equipe depois que um atendente assumir este ticket.}\`
 
 Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`vip_aprovar_pix_${chave}`).setLabel('Aprovar Pix (Equipe)').setEmoji('✅').setStyle(ButtonStyle.Success))] });
                 }
@@ -3115,66 +3145,6 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
             if (!interaction.isChatInputCommand()) return;
 
             const comando = interaction.commandName;
-
-            // ==================================================
-            // ==================================================
-            // /STOP — TRAVAR O CHAT ATUAL
-            // /START — DESTRAVAR O CHAT ATUAL
-            // Apenas Administradores podem executar os dois.
-            // ==================================================
-            if (comando === 'stop' || comando === 'start') {
-                if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-                    return interaction.reply({
-                        content: `❌ Apenas pessoas com a permissão **Administrador** podem usar o /${comando}.`,
-                        ephemeral: true
-                    });
-                }
-
-                if (!interaction.channel || !interaction.channel.isTextBased()) {
-                    return interaction.reply({
-                        content: `❌ O /${comando} precisa ser usado em um canal de texto.`,
-                        ephemeral: true
-                    });
-                }
-
-                const botMember = interaction.guild.members.me;
-                if (!botMember || !interaction.channel.permissionsFor(botMember).has(PermissionsBitField.Flags.ManageChannels)) {
-                    return interaction.reply({
-                        content: '❌ Eu preciso da permissão **Gerenciar Canais** neste canal para conseguir alterar o chat.',
-                        ephemeral: true
-                    });
-                }
-
-                try {
-                    if (comando === 'stop') {
-                        await interaction.channel.permissionOverwrites.edit(
-                            interaction.guild.roles.everyone,
-                            { SendMessages: false },
-                            { reason: `Chat travado por ${interaction.user.tag} usando /stop` }
-                        );
-
-                        return interaction.reply({
-                            content: '🔒 **Chat travado!**\n\nA partir de agora, somente membros com a permissão **Administrador** poderão enviar mensagens neste canal.'
-                        });
-                    }
-
-                    await interaction.channel.permissionOverwrites.edit(
-                        interaction.guild.roles.everyone,
-                        { SendMessages: true },
-                        { reason: `Chat destravado por ${interaction.user.tag} usando /start` }
-                    );
-
-                    return interaction.reply({
-                        content: '🔓 **Chat destravado!**\n\nAgora qualquer pessoa que tenha acesso ao canal poderá enviar mensagens novamente.'
-                    });
-                } catch (error) {
-                    console.error(`Erro ao executar /${comando}:`, error);
-                    return interaction.reply({
-                        content: `❌ Não consegui ${comando === 'stop' ? 'travar' : 'destravar'} este chat. Verifique se eu tenho **Gerenciar Canais**.\n\nErro: ${error.message}`,
-                        ephemeral: true
-                    });
-                }
-            }
 
             if (comando === 'vip-painel') {
                 if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: '❌ Você precisa da permissão Gerenciar Servidor.', ephemeral: true });
@@ -4337,7 +4307,7 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
 
                     texto +=
                         `**💎 VIP — ${vip.nome.toUpperCase()}**\n` +
-                        'Os comandos VIP estão disponíveis no canal de comandos VIP.\n\n';
+                        'Os comandos VIP estão disponíveis no canal VIP.\n\n';
 
                     if (
                         podeCriarCargoPersonalizado(vip)
@@ -5000,7 +4970,7 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                     '`/xcam` — Tenta fazer um XCAM.\n\n' +
 
                     '**💎 Sistema VIP:**\n' +
-                    'Os comandos VIP devem ser usados no canal de comandos VIP.\n' +
+                    'Os comandos VIP devem ser usados no canal VIP.\n' +
                     '`/vip criar` — Cria sua call VIP.\n' +
                     '`/vip-painel` — Envia/atualiza o painel de compras VIP (equipe).\n' +
                     '`/vip add` — Libera uma pessoa na sua call.\n' +
