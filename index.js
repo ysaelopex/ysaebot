@@ -65,7 +65,7 @@ const CARGO_AUTOROLE = '1537433971367874610';
 // CANAIS DOS COMANDOS
 // ======================================================
 
-const CANAL_COMANDOS_VIP = '1538394548848558201';
+const CANAL_COMANDOS_VIP = '1538611994926514198';
 
 const CANAL_COMANDOS = '1538394055359340605';
 
@@ -2566,7 +2566,7 @@ const comandos = [
         .setName('protecao')
         .setDescription(
             'Mostra o status da proteção.'
-        )
+        ),
 
     // ==================================================
     // ECONOMIA / DIVERSÃO / UTILIDADES
