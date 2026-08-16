@@ -21,7 +21,8 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMembers,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildVoiceStates
     ]
 });
 
@@ -60,7 +61,9 @@ const COMANDOS_MODERACAO = new Set([
     'cargo',
     'tirarcargo',
     'limpar',
-    'protecao'
+    'protecao',
+    'castigo',
+    'tirarcastigo'
 ]);
 
 const COMANDOS_NORMAIS = new Set([
@@ -79,7 +82,8 @@ const COMANDOS_NORMAIS = new Set([
     'relacionamento',
     'ranking',
     'xp',
-    'ajuda'
+    'ajuda',
+    'castigo-status'
 ]);
 
 // ======================================================
@@ -351,6 +355,219 @@ function salvarDados() {
             '❌ Erro ao salvar dados:',
             erro
         );
+
+    }
+
+}
+
+// ======================================================
+// SISTEMA DE CASTIGO
+// ======================================================
+
+function obterCastigo(guildId, userId) {
+
+    const usuario = obterUsuario(guildId, userId);
+
+    if (
+        !usuario.castigoFim ||
+        typeof usuario.castigoFim !== 'number'
+    ) {
+        return null;
+    }
+
+    if (Date.now() >= usuario.castigoFim) {
+        return null;
+    }
+
+    return {
+        fim: usuario.castigoFim,
+        motivo: usuario.castigoMotivo || 'Nenhum motivo informado.'
+    };
+
+}
+
+function limparDadosCastigo(guildId, userId) {
+
+    const usuario = obterUsuario(guildId, userId);
+
+    usuario.castigoFim = null;
+    usuario.castigoMotivo = null;
+
+    salvarDados();
+
+}
+
+function formatarTempoRestante(ms) {
+
+    const totalSegundos = Math.max(
+        0,
+        Math.ceil(ms / 1000)
+    );
+
+    const dias = Math.floor(totalSegundos / 86400);
+    const horas = Math.floor((totalSegundos % 86400) / 3600);
+    const minutos = Math.floor((totalSegundos % 3600) / 60);
+    const segundos = totalSegundos % 60;
+
+    const partes = [];
+
+    if (dias > 0) partes.push(`${dias}d`);
+    if (horas > 0) partes.push(`${horas}h`);
+    if (minutos > 0) partes.push(`${minutos}min`);
+    if (segundos > 0 && partes.length < 2) partes.push(`${segundos}s`);
+
+    return partes.length
+        ? partes.join(' ')
+        : 'menos de 1 segundo';
+}
+
+async function aplicarCastigo(guild, member, minutos, motivo) {
+
+    const agora = Date.now();
+    const fim = agora + (minutos * 60 * 1000);
+
+    if (!member.moderatable) {
+        throw new Error(
+            'Não consigo aplicar castigo nesse usuário. Verifique a hierarquia de cargos do bot.'
+        );
+    }
+
+    await member.timeout(
+        minutos * 60 * 1000,
+        `Castigo: ${motivo}`
+    );
+
+    // Se a pessoa estiver em uma call, desconecta imediatamente.
+    if (member.voice?.channel) {
+        await member.voice.disconnect(
+            'Castigo aplicado pelo sistema.'
+        ).catch(() => null);
+    }
+
+    const usuario = obterUsuario(
+        guild.id,
+        member.id
+    );
+
+    usuario.castigoFim = fim;
+    usuario.castigoMotivo = motivo;
+
+    salvarDados();
+
+    await enviarLog(
+        guild,
+        '🔒 Castigo aplicado',
+        `${member} recebeu castigo por **${minutos} minuto(s)**.\nMotivo: **${motivo}**`
+    );
+
+}
+
+async function removerCastigo(guild, member, motivo = 'Castigo removido pela moderação.') {
+
+    const castigo = obterCastigo(
+        guild.id,
+        member.id
+    );
+
+    if (!castigo) {
+        limparDadosCastigo(guild.id, member.id);
+        return false;
+    }
+
+    // Só remove o timeout se ele ainda corresponder ao castigo salvo.
+    const timeoutAtual = member.communicationDisabledUntilTimestamp || 0;
+
+    if (
+        timeoutAtual > 0 &&
+        timeoutAtual <= castigo.fim + 10000
+    ) {
+        await member.timeout(
+            null,
+            motivo
+        );
+    }
+
+    limparDadosCastigo(
+        guild.id,
+        member.id
+    );
+
+    await enviarLog(
+        guild,
+        '🔓 Castigo removido',
+        `${member} teve o castigo removido.\nMotivo: **${motivo}**`
+    );
+
+    return true;
+
+}
+
+async function verificarCastigosAtivos() {
+
+    for (const guild of client.guilds.cache.values()) {
+
+        const dadosGuild = dados[guild.id];
+
+        if (!dadosGuild) continue;
+
+        for (const userId of Object.keys(dadosGuild)) {
+
+            const usuario = dadosGuild[userId];
+
+            if (
+                !usuario ||
+                typeof usuario.castigoFim !== 'number'
+            ) {
+                continue;
+            }
+
+            const member = await guild.members
+                .fetch(userId)
+                .catch(() => null);
+
+            if (!member) continue;
+
+            if (Date.now() >= usuario.castigoFim) {
+
+                const timeoutAtual =
+                    member.communicationDisabledUntilTimestamp || 0;
+
+                if (timeoutAtual > 0) {
+                    await member.timeout(
+                        null,
+                        'Castigo encerrado automaticamente.'
+                    ).catch(() => null);
+                }
+
+                limparDadosCastigo(
+                    guild.id,
+                    userId
+                );
+
+                await enviarLog(
+                    guild,
+                    '🔓 Castigo encerrado',
+                    `${member} terminou o período de castigo automaticamente.`
+                );
+
+                continue;
+            }
+
+            // Reaplica o restante do timeout após reinício do bot/Render.
+            const restante =
+                usuario.castigoFim - Date.now();
+
+            if (
+                !member.communicationDisabledUntilTimestamp ||
+                member.communicationDisabledUntilTimestamp < Date.now() + 5000
+            ) {
+                await member.timeout(
+                    Math.min(restante, 28 * 24 * 60 * 60 * 1000),
+                    `Restaurando castigo após reinício do bot: ${usuario.castigoMotivo || 'Sem motivo'}`
+                ).catch(() => null);
+            }
+
+        }
 
     }
 
@@ -1859,6 +2076,45 @@ const comandos = [
         ),
 
     // ==================================================
+    // CASTIGO
+    // ==================================================
+
+    new SlashCommandBuilder()
+        .setName('castigo')
+        .setDescription('Coloca um usuário de castigo.')
+        .addUserOption(o =>
+            o
+                .setName('usuario')
+                .setDescription('Usuário que receberá o castigo.')
+                .setRequired(true)
+        )
+        .addIntegerOption(o =>
+            o
+                .setName('minutos')
+                .setDescription('Duração do castigo em minutos.')
+                .setRequired(true)
+                .setMinValue(1)
+                .setMaxValue(40320)
+        )
+        .addStringOption(o =>
+            o
+                .setName('motivo')
+                .setDescription('Motivo do castigo.')
+                .setRequired(false)
+                .setMaxLength(500)
+        ),
+
+    new SlashCommandBuilder()
+        .setName('tirarcastigo')
+        .setDescription('Remove o castigo de um usuário.')
+        .addUserOption(o =>
+            o
+                .setName('usuario')
+                .setDescription('Usuário que terá o castigo removido.')
+                .setRequired(true)
+        ),
+
+    // ==================================================
     // SOCIAL
     // ==================================================
 
@@ -1990,6 +2246,10 @@ const comandos = [
         .setDescription('Mostra seu XP.'),
 
     new SlashCommandBuilder()
+        .setName('castigo-status')
+        .setDescription('Mostra quanto tempo falta do seu castigo.'),
+
+    new SlashCommandBuilder()
         .setName('ajuda')
         .setDescription(
             'Mostra os comandos disponíveis.'
@@ -2063,6 +2323,12 @@ client.once(
                 '✅ Comandos registrados!'
             );
 
+            await verificarCastigosAtivos();
+
+            console.log(
+                '🔒 Castigos ativos verificados.'
+            );
+
         } catch (erro) {
 
             console.log(
@@ -2074,6 +2340,23 @@ client.once(
 
     }
 );
+
+// ======================================================
+// VERIFICAR CASTIGOS AUTOMATICAMENTE
+// ======================================================
+
+setInterval(() => {
+
+    verificarCastigosAtivos().catch(erro => {
+
+        console.log(
+            '❌ Erro ao verificar castigos:',
+            erro
+        );
+
+    });
+
+}, 15000);
 
 // ======================================================
 // NOVO MEMBRO
@@ -4116,8 +4399,239 @@ client.on(
                     '`/vip cargoinfo` — Mostra informações do cargo.\n' +
                     '`/vip excluircargo` — Exclui seu cargo.\n\n' +
 
+                    '**🔒 Castigo:**\n' +
+                    '`/castigo-status` — Mostra quanto tempo falta do seu castigo.\n\n' +
                     '**🛡️ Moderação:**\n' +
+                    '`/castigo` — Aplica castigo.\n' +
+                    '`/tirarcastigo` — Remove castigo.\n' +
                     'Os comandos de moderação devem ser usados no canal de moderação.'
+                );
+
+            }
+
+            // ==================================================
+            // STATUS DO CASTIGO
+            // ==================================================
+
+            if (
+                comando === 'castigo-status'
+            ) {
+
+                const castigo = obterCastigo(
+                    interaction.guild.id,
+                    interaction.user.id
+                );
+
+                if (!castigo) {
+
+                    limparDadosCastigo(
+                        interaction.guild.id,
+                        interaction.user.id
+                    );
+
+                    return interaction.reply({
+                        content:
+                            '✅ Você não está de castigo no momento.',
+                        ephemeral: true
+                    });
+
+                }
+
+                const restante =
+                    castigo.fim - Date.now();
+
+                return interaction.reply({
+                    content:
+                        `🔒 **Você está de castigo.**\n\n` +
+                        `⏳ **Tempo restante:** ${formatarTempoRestante(restante)}\n` +
+                        `🕐 **Termina em:** <t:${Math.floor(castigo.fim / 1000)}:F>\n` +
+                        `📝 **Motivo:** ${castigo.motivo}`,
+                    ephemeral: true
+                });
+
+            }
+
+            // ==================================================
+            // CASTIGO
+            // ==================================================
+
+            if (
+                comando === 'castigo'
+            ) {
+
+                if (
+                    !interaction.member.permissions.has(
+                        PermissionsBitField.Flags.ModerateMembers
+                    )
+                ) {
+
+                    return interaction.reply({
+                        content:
+                            '❌ Você não tem permissão para aplicar castigos.',
+                        ephemeral: true
+                    });
+
+                }
+
+                const alvo =
+                    interaction.options.getMember(
+                        'usuario'
+                    );
+
+                const minutos =
+                    interaction.options.getInteger(
+                        'minutos'
+                    );
+
+                const motivo =
+                    interaction.options.getString(
+                        'motivo'
+                    ) ||
+                    'Nenhum motivo informado.';
+
+                if (!alvo) {
+
+                    return interaction.reply({
+                        content:
+                            '❌ Usuário não encontrado.',
+                        ephemeral: true
+                    });
+
+                }
+
+                if (alvo.id === interaction.user.id) {
+
+                    return interaction.reply({
+                        content:
+                            '❌ Você não pode colocar a si mesmo de castigo.',
+                        ephemeral: true
+                    });
+
+                }
+
+                if (alvo.user.bot) {
+
+                    return interaction.reply({
+                        content:
+                            '❌ Você não pode colocar um bot de castigo.',
+                        ephemeral: true
+                    });
+
+                }
+
+                if (
+                    alvo.id === interaction.guild.ownerId
+                ) {
+
+                    return interaction.reply({
+                        content:
+                            '❌ Não é possível colocar o dono do servidor de castigo.',
+                        ephemeral: true
+                    });
+
+                }
+
+                if (
+                    interaction.member.roles.highest.position <=
+                    alvo.roles.highest.position &&
+                    interaction.user.id !== interaction.guild.ownerId
+                ) {
+
+                    return interaction.reply({
+                        content:
+                            '❌ Você não pode aplicar castigo em alguém com cargo igual ou superior ao seu.',
+                        ephemeral: true
+                    });
+
+                }
+
+                try {
+
+                    await aplicarCastigo(
+                        interaction.guild,
+                        alvo,
+                        minutos,
+                        motivo
+                    );
+
+                } catch (erro) {
+
+                    console.log(
+                        '❌ Erro ao aplicar castigo:',
+                        erro
+                    );
+
+                    return interaction.reply({
+                        content:
+                            `❌ Não consegui aplicar o castigo.\n\n${erro.message}`,
+                        ephemeral: true
+                    });
+
+                }
+
+                return interaction.reply(
+                    `🔒 ${alvo} recebeu **castigo por ${minutos} minuto(s)**.\n` +
+                    `📝 Motivo: **${motivo}**\n` +
+                    `⏳ Termina em: <t:${Math.floor((Date.now() + minutos * 60 * 1000) / 1000)}:R>`
+                );
+
+            }
+
+            // ==================================================
+            // TIRAR CASTIGO
+            // ==================================================
+
+            if (
+                comando === 'tirarcastigo'
+            ) {
+
+                if (
+                    !interaction.member.permissions.has(
+                        PermissionsBitField.Flags.ModerateMembers
+                    )
+                ) {
+
+                    return interaction.reply({
+                        content:
+                            '❌ Você não tem permissão para remover castigos.',
+                        ephemeral: true
+                    });
+
+                }
+
+                const alvo =
+                    interaction.options.getMember(
+                        'usuario'
+                    );
+
+                if (!alvo) {
+
+                    return interaction.reply({
+                        content:
+                            '❌ Usuário não encontrado.',
+                        ephemeral: true
+                    });
+
+                }
+
+                const removido = await removerCastigo(
+                    interaction.guild,
+                    alvo,
+                    `Castigo removido por ${interaction.user.tag}`
+                );
+
+                if (!removido) {
+
+                    return interaction.reply({
+                        content:
+                            `ℹ️ ${alvo} não está de castigo.`,
+                        ephemeral: true
+                    });
+
+                }
+
+                return interaction.reply(
+                    `🔓 O castigo de ${alvo} foi removido com sucesso.`
                 );
 
             }
@@ -4515,6 +5029,49 @@ client.on(
 );
 
 // ======================================================
+// BLOQUEIO DE VOZ DURANTE CASTIGO
+// ======================================================
+
+client.on(
+    'voiceStateUpdate',
+    async (oldState, newState) => {
+
+        try {
+
+            if (!newState.guild || !newState.member) {
+                return;
+            }
+
+            const castigo = obterCastigo(
+                newState.guild.id,
+                newState.member.id
+            );
+
+            if (!castigo) {
+                return;
+            }
+
+            if (newState.channelId) {
+
+                await newState.member.voice.disconnect(
+                    'Usuário está de castigo.'
+                ).catch(() => null);
+
+            }
+
+        } catch (erro) {
+
+            console.log(
+                '❌ Erro no bloqueio de voz do castigo:',
+                erro
+            );
+
+        }
+
+    }
+);
+
+// ======================================================
 // MENSAGENS
 // ======================================================
 
@@ -4533,6 +5090,23 @@ client.on(
 
             const guildId =
                 message.guild.id;
+
+            // ==================================================
+            // BLOQUEIO DE MENSAGEM DURANTE CASTIGO
+            // ==================================================
+
+            const castigoAtivo = obterCastigo(
+                guildId,
+                message.author.id
+            );
+
+            if (castigoAtivo) {
+
+                await message.delete().catch(() => null);
+
+                return;
+
+            }
 
             const usuario =
                 obterUsuario(
