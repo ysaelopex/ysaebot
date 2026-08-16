@@ -42,7 +42,6 @@ const CARGO_SUPORTE = '1537432685075496980';
 // ======================================================
 const CANAL_VIP = '1538611994926514198';
 const CATEGORIA_TICKETS = '1538290771843752067';
-const 🔑 A chave Pix será enviada manualmente pela equipe depois que um atendente assumir este ticket. = process.env.🔑 A chave Pix será enviada manualmente pela equipe depois que um atendente assumir este ticket. || 'CONFIGURE_SUA_CHAVE_PIX_NO_RENDER';
 
 const VIP_COMPRAS = {
     prata: { nome: 'VIP Prata', cargoId: '1538379784827043880', xp: 15000, preco: 20, emoji: '💎' },
