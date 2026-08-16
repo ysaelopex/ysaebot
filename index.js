@@ -42,15 +42,15 @@ const CARGO_SUPORTE = '1537432685075496980';
 // ======================================================
 const CANAL_VIP = '1538611994926514198';
 const CATEGORIA_TICKETS = '1538290771843752067';
-const PIX_KEY = process.env.PIX_KEY || 'CONFIGURE_SUA_CHAVE_PIX_NO_RENDER';
+const 🔑 A chave Pix será enviada manualmente pela equipe depois que um atendente assumir este ticket. = process.env.🔑 A chave Pix será enviada manualmente pela equipe depois que um atendente assumir este ticket. || 'CONFIGURE_SUA_CHAVE_PIX_NO_RENDER';
 
 const VIP_COMPRAS = {
     prata: { nome: 'VIP Prata', cargoId: '1538379784827043880', xp: 15000, preco: 20, emoji: '💎' },
     ouro: { nome: 'VIP Ouro', cargoId: '1538379970253033633', xp: 20000, preco: 25, emoji: '🥇' },
     diamante: { nome: 'VIP Diamante', cargoId: '1538380206476103761', xp: 30000, preco: 35, emoji: '💎' },
     magnata: { nome: 'VIP Magnata', cargoId: '1538380498789994598', xp: 70000, preco: 50, emoji: '👑' },
-    black: { nome: 'VIP Black', cargoId: '1538380635553538109', xp: 100000, preco: 90, emoji: '🖤' },
-    legendary: { nome: 'VIP Legendery', cargoId: '1538380285551452222', xp: 150000, preco: 150, emoji: '✨' }
+    black: { nome: 'VIP Black', cargoId: '1538380635553538109', xp: 95000, preco: 100, emoji: '🖤' },
+    legendary: { nome: 'VIP Legendery', cargoId: '1538380285551452222', xp: 140000, preco: 145, emoji: '✨' }
 };
 
 const COOLDOWN_FUN = 5000;
@@ -66,7 +66,7 @@ const CARGO_AUTOROLE = '1537433971367874610';
 // CANAIS DOS COMANDOS
 // ======================================================
 
-const CANAL_COMANDOS_VIP = '1538394548848558201';
+const CANAL_COMANDOS_VIP = '1538611994926514198';
 
 const CANAL_COMANDOS = '1538394055359340605';
 
@@ -110,6 +110,7 @@ const COMANDOS_NORMAIS = new Set([
     'xp',
     'ajuda',
     'castigo-status',
+    'viptime',
     'addxp', 'removexp', 'saldo', 'daily', 'work', 'transferir', 'loja', 'comprar', 'inventario', 'ricos', 'metas',
     '8ball', 'caraoucoroa', 'dados', 'adivinha', 'rankingdiversao'
 ]);
@@ -265,6 +266,120 @@ const ORDEM_VIP = [
         categoria: CATEGORIA_VIPS
     }
 ];
+
+// ======================================================
+// CONTROLE DE VALIDADE DOS VIPs
+// ======================================================
+
+const VIP_DURACAO_MS = 30 * 24 * 60 * 60 * 1000;
+
+function obterRegistroVip(usuario) {
+    if (!usuario.vip) usuario.vip = {};
+    if (typeof usuario.vip.inicio !== 'number') usuario.vip.inicio = null;
+    if (typeof usuario.vip.fim !== 'number') usuario.vip.fim = null;
+    if (typeof usuario.vip.chave !== 'string') usuario.vip.chave = null;
+    return usuario.vip;
+}
+
+function iniciarContagemVip(guildId, userId, chave, inicio = Date.now()) {
+    const usuario = obterUsuario(guildId, userId);
+    const registro = obterRegistroVip(usuario);
+    registro.chave = chave;
+    registro.inicio = inicio;
+    registro.fim = inicio + VIP_DURACAO_MS;
+    salvarDados();
+    return registro;
+}
+
+function limparRegistroVip(guildId, userId) {
+    const usuario = obterUsuario(guildId, userId);
+    const registro = obterRegistroVip(usuario);
+    registro.chave = null;
+    registro.inicio = null;
+    registro.fim = null;
+    salvarDados();
+}
+
+function obterVipPorChave(chave) {
+    return VIP_COMPRAS[chave] || null;
+}
+
+function obterChaveVipPorCargoId(roleId) {
+    const entrada = Object.entries(VIP_COMPRAS).find(([, vip]) => vip.cargoId === roleId);
+    return entrada ? entrada[0] : null;
+}
+
+function obterVipAtualComChave(member) {
+    const vipPrioritario = ORDEM_VIP.find(v => member.roles.cache.has(v.id));
+    if (!vipPrioritario) return null;
+    const vip = VIP_COMPRAS[vipPrioritario.chave];
+    return vip ? { chave: vipPrioritario.chave, vip } : null;
+}
+
+async function removerRecursosVipDoUsuario(guild, userId) {
+    // A call e o cargo personalizado só existem se o usuário os criou pelos comandos VIP.
+    await fecharCallVIP(guild, userId).catch(() => null);
+    await excluirCargoPersonalizado(guild, userId).catch(() => null);
+    limparRegistroVip(guild.id, userId);
+}
+
+async function processarExpiracaoVip(guild, userId) {
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (!member) return false;
+
+    const atual = obterVipAtualComChave(member);
+    const usuario = obterUsuario(guild.id, userId);
+    const registro = obterRegistroVip(usuario);
+
+    if (!registro.fim || Date.now() < registro.fim) return false;
+
+    // Se ainda possui o VIP que expirou, remova somente do usuário.
+    if (registro.chave) {
+        const vip = obterVipPorChave(registro.chave);
+        if (vip && member.roles.cache.has(vip.cargoId)) {
+            const role = guild.roles.cache.get(vip.cargoId) || await guild.roles.fetch(vip.cargoId).catch(() => null);
+            if (role) {
+                await member.roles.remove(role, `VIP ${vip.nome} expirou após 30 dias`).catch(() => null);
+            }
+        }
+    }
+
+    // Atualiza o membro antes de decidir se ainda existe outro VIP.
+    const membroAtualizado = await guild.members.fetch(userId).catch(() => member);
+
+    // Só destrói a call/cargo personalizado quando não restar nenhum VIP.
+    const depois = obterVipAtualComChave(membroAtualizado);
+    if (!depois) {
+        await removerRecursosVipDoUsuario(guild, userId);
+        await enviarLog(guild, '⏰ VIP expirado', `${member} teve o VIP removido após 30 dias. A call e o cargo personalizado criados pelo sistema também foram removidos, se existiam.`).catch(() => null);
+    } else {
+        // Se existe outro VIP, começa uma nova contagem para o VIP que ficou.
+        iniciarContagemVip(guild.id, userId, depois.chave, Date.now());
+    }
+
+    return true;
+}
+
+async function verificarVipsExpirados() {
+    for (const guild of client.guilds.cache.values()) {
+        const dadosGuild = dados[guild.id];
+        if (!dadosGuild) continue;
+        for (const userId of Object.keys(dadosGuild)) {
+            const usuario = dadosGuild[userId];
+            if (!usuario?.vip?.fim) continue;
+            if (Date.now() >= usuario.vip.fim) {
+                await processarExpiracaoVip(guild, userId).catch(erro => console.log('❌ Erro ao expirar VIP:', erro));
+            }
+        }
+    }
+}
+
+async function registrarVipDetectado(member, chave, inicio = Date.now()) {
+    const usuario = obterUsuario(member.guild.id, member.id);
+    const registro = obterRegistroVip(usuario);
+    if (registro.chave === chave && registro.inicio && registro.fim) return registro;
+    return iniciarContagemVip(member.guild.id, member.id, chave, inicio);
+}
 
 // ======================================================
 // TOKEN
@@ -625,6 +740,7 @@ function obterUsuario(guildId, userId) {
             pontosDiversao: 0,
             metasConcluidas: {},
             adivinha: null,
+            vip: { chave: null, inicio: null, fim: null },
             xpRelacionamento: 0,
             mensagens: 0,
             comandos: 0,
@@ -673,6 +789,7 @@ function obterUsuario(guildId, userId) {
     if (typeof usuario.pontosDiversao !== 'number') usuario.pontosDiversao = 0;
     if (!usuario.metasConcluidas) usuario.metasConcluidas = {};
     if (!usuario.adivinha) usuario.adivinha = null;
+    obterRegistroVip(usuario);
 
     return usuario;
 
@@ -1033,7 +1150,8 @@ async function criarCargoPersonalizado(
                 Connect: true,
                 Speak: true,
                 Stream: true,
-                UseVAD: true
+                UseVAD: true,
+                SendMessages: true
             }
         );
 
@@ -1146,7 +1264,8 @@ async function adicionarCargoPersonalizado(
                 Connect: true,
                 Speak: true,
                 Stream: true,
-                UseVAD: true
+                UseVAD: true,
+                SendMessages: true
             }
         );
 
@@ -1261,6 +1380,8 @@ async function criarCallVIP(
     // PERMISSÕES DA CALL
     // ==================================================
 
+    const permiteChatDaCall = new Set(['magnata', 'black', 'legendary']).has(vip.chave);
+
     const permissionOverwrites = [
 
         {
@@ -1268,7 +1389,8 @@ async function criarCallVIP(
 
             deny: [
                 PermissionsBitField.Flags.ViewChannel,
-                PermissionsBitField.Flags.Connect
+                PermissionsBitField.Flags.Connect,
+                ...(permiteChatDaCall ? [] : [PermissionsBitField.Flags.SendMessages])
             ]
         },
 
@@ -1280,8 +1402,10 @@ async function criarCallVIP(
                 PermissionsBitField.Flags.Connect,
                 PermissionsBitField.Flags.Speak,
                 PermissionsBitField.Flags.Stream,
-                PermissionsBitField.Flags.UseVAD
-            ]
+                PermissionsBitField.Flags.UseVAD,
+                ...(permiteChatDaCall ? [PermissionsBitField.Flags.SendMessages] : [] )
+            ],
+            deny: permiteChatDaCall ? [] : [PermissionsBitField.Flags.SendMessages]
         },
 
         {
@@ -1315,8 +1439,10 @@ async function criarCallVIP(
                 PermissionsBitField.Flags.Connect,
                 PermissionsBitField.Flags.Speak,
                 PermissionsBitField.Flags.Stream,
-                PermissionsBitField.Flags.UseVAD
-            ]
+                PermissionsBitField.Flags.UseVAD,
+                ...(permiteChatDaCall ? [PermissionsBitField.Flags.SendMessages] : [])
+            ],
+            deny: permiteChatDaCall ? [] : [PermissionsBitField.Flags.SendMessages]
 
         });
 
@@ -1793,7 +1919,10 @@ async function enviarPainelVIP(guild) {
     if (!canal || !canal.isTextBased()) return;
 
     const mensagens = await canal.messages.fetch({ limit: 50 }).catch(() => null);
-    if (mensagens?.some(m => m.author.id === client.user.id && m.embeds.some(e => e.title === '💎 LOJA VIP — RAVEN'))) return;
+    const painelExistente = mensagens?.find(m =>
+        m.author.id === client.user.id &&
+        m.embeds.some(e => e.title === '💎 LOJA VIP — RAVEN')
+    );
 
     const embed = new EmbedBuilder()
         .setTitle('💎 LOJA VIP — RAVEN')
@@ -1809,9 +1938,9 @@ async function enviarPainelVIP(guild) {
 ' +
             '**👑 Magnata** — 70.000 XP ou R$ 50
 ' +
-            '**🖤 Black** — 100.000 XP ou R$ 90
+            '**🖤 Black** — 95.000 XP ou R$ 100
 ' +
-            '**✨ Legendery** — 150.000 XP ou R$ 150
+            '**✨ Legendery** — 140.000 XP ou R$ 145
 
 ' +
             'Clique em um botão para abrir um ticket privado. Dentro do ticket você escolherá **XP ou Pix**.'
@@ -1827,7 +1956,11 @@ async function enviarPainelVIP(guild) {
         ...['magnata','black','legendary'].map(k => new ButtonBuilder().setCustomId(`vip_comprar_${k}`).setLabel(VIP_COMPRAS[k].nome).setEmoji(VIP_COMPRAS[k].emoji).setStyle(ButtonStyle.Secondary))
     );
 
-    await canal.send({ embeds: [embed], components: [row1, row2] });
+    if (painelExistente) {
+        await painelExistente.edit({ embeds: [embed], components: [row1, row2] });
+    } else {
+        await canal.send({ embeds: [embed], components: [row1, row2] });
+    }
 }
 
 async function criarTicketVIP(interaction, chave) {
@@ -1886,6 +2019,7 @@ async function entregarVIP(guild, userId, chave) {
     if (!role) throw new Error('Cargo VIP não encontrado.');
     if (role.position >= guild.members.me.roles.highest.position) throw new Error('O cargo VIP está acima do cargo do bot.');
     await member.roles.add(role, `Compra ${vip.nome}`);
+    iniciarContagemVip(guild.id, userId, chave);
     return role;
 }
 
@@ -2413,6 +2547,10 @@ const comandos = [
         .setDescription('Mostra seu XP.'),
 
     new SlashCommandBuilder()
+        .setName('viptime')
+        .setDescription('Mostra há quanto tempo seu VIP está ativo e quando expira.'),
+
+    new SlashCommandBuilder()
         .setName('castigo-status')
         .setDescription('Mostra quanto tempo falta do seu castigo.'),
 
@@ -2490,7 +2628,7 @@ client.once(
         );
 
         console.log(
-            `💎 Canal VIP: ${CANAL_COMANDOS_VIP}`
+            `💎 Canal VIP: ${CANAL_VIP}`
         );
 
         console.log(
@@ -2524,10 +2662,12 @@ client.once(
             );
 
             await verificarCastigosAtivos();
+            await verificarVipsExpirados();
 
             console.log(
                 '🔒 Castigos ativos verificados.'
             );
+            console.log('💎 VIPs expirados verificados.');
 
         } catch (erro) {
 
@@ -2557,6 +2697,16 @@ setInterval(() => {
     });
 
 }, 15000);
+
+// ======================================================
+// VERIFICAR VIPs EXPIRADOS AUTOMATICAMENTE
+// ======================================================
+
+setInterval(() => {
+    verificarVipsExpirados().catch(erro => {
+        console.log('❌ Erro ao verificar VIPs expirados:', erro);
+    });
+}, 30000);
 
 // ======================================================
 // NOVO MEMBRO
@@ -2619,6 +2769,38 @@ client.on(
 
     }
 );
+
+// ======================================================
+// CONTROLE AUTOMÁTICO DOS VIPs
+// ======================================================
+
+client.on('guildMemberUpdate', async (oldMember, newMember) => {
+    try {
+        if (!newMember.guild) return;
+
+        const antes = obterVipAtualComChave(oldMember);
+        const depois = obterVipAtualComChave(newMember);
+
+        // VIP foi adicionado ou trocado manualmente.
+        if (depois && (!antes || antes.chave !== depois.chave)) {
+            iniciarContagemVip(newMember.guild.id, newMember.id, depois.chave);
+            return;
+        }
+
+        // O último VIP foi removido. Não apaga o cargo VIP do servidor,
+        // apenas remove do membro e limpa os recursos que ele criou.
+        if (antes && !depois) {
+            await removerRecursosVipDoUsuario(newMember.guild, newMember.id);
+            await enviarLog(
+                newMember.guild,
+                '🧹 Recursos VIP removidos',
+                `${newMember} perdeu o VIP **${antes.vip.nome}**. A call privada e o cargo personalizado criados pelo sistema foram excluídos, se existiam.`
+            ).catch(() => null);
+        }
+    } catch (erro) {
+        console.log('❌ Erro no controle automático do VIP:', erro);
+    }
+});
 
 // ======================================================
 // CRIAÇÃO DE CANAL
@@ -2902,7 +3084,7 @@ ${e.message}`, ephemeral: true });
                     return interaction.reply({ content: `💳 **Pagamento via Pix — ${vip.nome}**
 
 Valor: **R$ ${vip.preco.toFixed(2).replace('.', ',')}**
-Chave Pix: \`${PIX_KEY}\`
+Chave Pix: \`${🔑 A chave Pix será enviada manualmente pela equipe depois que um atendente assumir este ticket.}\`
 
 Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`vip_aprovar_pix_${chave}`).setLabel('Aprovar Pix (Equipe)').setEmoji('✅').setStyle(ButtonStyle.Success))] });
                 }
@@ -2982,6 +3164,37 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                     if (lote.size < 100 || (quantidade && restantes <= 0)) break;
                 }
                 return interaction.editReply(`🧹 Foram apagadas **${apagadas}** mensagens suas neste canal.`);
+            }
+
+            // ==================================================
+            // /VIPTIME
+            // ==================================================
+            if (comando === 'viptime') {
+                const member = await interaction.guild.members.fetch(interaction.user.id);
+                const atual = obterVipAtualComChave(member);
+                if (!atual) {
+                    return interaction.reply({ content: '❌ Você não possui um VIP ativo.', ephemeral: true });
+                }
+
+                const usuario = obterUsuario(interaction.guild.id, interaction.user.id);
+                const registro = obterRegistroVip(usuario);
+                if (!registro.inicio || !registro.fim || registro.chave !== atual.chave) {
+                    iniciarContagemVip(interaction.guild.id, interaction.user.id, atual.chave);
+                }
+
+                const atualizado = obterRegistroVip(obterUsuario(interaction.guild.id, interaction.user.id));
+                const diasPassados = Math.max(0, Math.floor((Date.now() - atualizado.inicio) / 86400000));
+                const diasRestantes = Math.max(0, Math.ceil((atualizado.fim - Date.now()) / 86400000));
+                return interaction.reply({ embeds: [new EmbedBuilder()
+                    .setTitle(`⏳ ${atual.vip.nome}`)
+                    .setDescription(`Seu VIP está ativo por **30 dias**.`)
+                    .addFields(
+                        { name: '📅 Contratado em', value: `<t:${Math.floor(atualizado.inicio / 1000)}:F>`, inline: false },
+                        { name: '⏱️ Ativo há', value: `**${diasPassados} dia(s)**`, inline: true },
+                        { name: '⌛ Expira em', value: `**${diasRestantes} dia(s)**`, inline: true },
+                        { name: '🗓️ Expiração', value: `<t:${Math.floor(atualizado.fim / 1000)}:F>`, inline: false }
+                    )
+                    .setTimestamp()] });
             }
 
             // ==================================================
@@ -4043,6 +4256,7 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                     '**👤 PERFIL / XP**\n' +
                     '`/perfil` — Mostra seu perfil.\n' +
                     '`/xp` — Mostra seu XP.\n' +
+                    '`/viptime` — Mostra há quantos dias seu VIP está ativo e quando expira.\n' +
                     '`/ranking` — Mostra o ranking de XP.\n' +
                     '`/relacionamento` — Mostra seu relacionamento.\n\n';
 
@@ -4712,6 +4926,7 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                     '`/info` — Mostra os comandos que você pode usar.\n' +
                     '`/perfil` — Mostra seu perfil.\n' +
                     '`/xp` — Mostra seu XP.\n' +
+                    '`/viptime` — Mostra há quantos dias seu VIP está ativo e quando expira.\n' +
                     '`/ranking` — Mostra o ranking.\n' +
                     '`/casar` — Casa com alguém.\n' +
                     '`/divorcio` — Termina seu relacionamento.\n' +
@@ -4727,6 +4942,7 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                     '**💎 Sistema VIP:**\n' +
                     'Os comandos VIP devem ser usados no canal VIP.\n' +
                     '`/vip criar` — Cria sua call VIP.\n' +
+                    '`/vip-painel` — Envia/atualiza o painel de compras VIP (equipe).\n' +
                     '`/vip add` — Libera uma pessoa na sua call.\n' +
                     '`/vip remover` — Remove uma pessoa da sua call.\n' +
                     '`/vip fechar` — Fecha sua call VIP.\n' +
@@ -4746,7 +4962,7 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
 
                     '**🔒 Castigo:**\n' +
                     '`/castigo-status` — Mostra quanto tempo falta do seu castigo.\n' +
-                    '`/cl [quantidade]` — Apaga suas mensagens anteriores somente neste canal.\n' +
+                    '`/cl [quantidade]` — Apaga suas mensagens anteriores somente neste canal; funciona em qualquer canal de texto.\n' +
                     '`/addxp` — Adiciona XP a um usuário (equipe).\n' +
                     '`/removexp` — Remove XP de um usuário (equipe).\n\n' +
                     '**💰 ECONOMIA**\n' +
