@@ -6,7 +6,10 @@ import {
     REST,
     Routes,
     EmbedBuilder,
-    ChannelType
+    ChannelType,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle
 } from 'discord.js';
 
 import fs from 'fs';
@@ -33,6 +36,29 @@ const client = new Client({
 const CANAL_LOGS = '📋・logs';
 
 const CARGO_SUPORTE = '1537432685075496980';
+
+// ======================================================
+// PAINEL VIP / TICKETS / ECONOMIA
+// ======================================================
+const CANAL_VIP = '1538611994926514198';
+const CATEGORIA_TICKETS = '1538290771843752067';
+const PIX_KEY = process.env.PIX_KEY || 'CONFIGURE_SUA_CHAVE_PIX_NO_RENDER';
+
+const VIP_COMPRAS = {
+    prata: { nome: 'VIP Prata', cargoId: '1538379784827043880', xp: 15000, preco: 20, emoji: '💎' },
+    ouro: { nome: 'VIP Ouro', cargoId: '1538379970253033633', xp: 20000, preco: 25, emoji: '🥇' },
+    diamante: { nome: 'VIP Diamante', cargoId: '1538380206476103761', xp: 30000, preco: 35, emoji: '💎' },
+    magnata: { nome: 'VIP Magnata', cargoId: '1538380498789994598', xp: 70000, preco: 50, emoji: '👑' },
+    black: { nome: 'VIP Black', cargoId: '1538380635553538109', xp: 100000, preco: 90, emoji: '🖤' },
+    legendary: { nome: 'VIP Legendery', cargoId: '1538380285551452222', xp: 150000, preco: 150, emoji: '✨' }
+};
+
+const COOLDOWN_FUN = 5000;
+const respostas8Ball = [
+    '🎱 Sim, com certeza!', '🎱 Provavelmente sim.', '🎱 As chances são boas.',
+    '🎱 Talvez.', '🎱 Melhor não contar com isso.', '🎱 Provavelmente não.',
+    '🎱 Não.', '🎱 O futuro está incerto.'
+];
 
 const CARGO_AUTOROLE = '1537433971367874610';
 
@@ -83,7 +109,9 @@ const COMANDOS_NORMAIS = new Set([
     'ranking',
     'xp',
     'ajuda',
-    'castigo-status'
+    'castigo-status',
+    'addxp', 'removexp', 'saldo', 'daily', 'work', 'transferir', 'loja', 'comprar', 'inventario', 'ricos', 'metas',
+    '8ball', 'caraoucoroa', 'dados', 'adivinha', 'rankingdiversao'
 ]);
 
 // ======================================================
@@ -207,15 +235,15 @@ const ORDEM_VIP = [
         categoria: CATEGORIA_ALTA_CUPULA
     },
     {
-        nome: 'Black',
-        chave: 'black',
-        id: CARGOS_VIP.black,
-        categoria: CATEGORIA_ALTA_CUPULA
-    },
-    {
         nome: 'Magnata',
         chave: 'magnata',
         id: CARGOS_VIP.magnata,
+        categoria: CATEGORIA_ALTA_CUPULA
+    },
+    {
+        nome: 'Black',
+        chave: 'black',
+        id: CARGOS_VIP.black,
         categoria: CATEGORIA_ALTA_CUPULA
     },
     {
@@ -588,8 +616,15 @@ function obterUsuario(guildId, userId) {
         dados[guildId][userId] = {
 
             xp: 0,
+            xpTotal: 0,
             nivel: 1,
             parceiro: null,
+            inventario: [],
+            ultimoDaily: 0,
+            ultimoWork: 0,
+            pontosDiversao: 0,
+            metasConcluidas: {},
+            adivinha: null,
             xpRelacionamento: 0,
             mensagens: 0,
             comandos: 0,
@@ -624,7 +659,22 @@ function obterUsuario(guildId, userId) {
         dados[guildId][userId].cooldowns.xcam = 0;
     }
 
-    return dados[guildId][userId];
+    const usuario = dados[guildId][userId];
+
+    if (typeof usuario.xpTotal !== 'number') {
+        const nivelAtual = Math.max(1, Number(usuario.nivel) || 1);
+        const xpAtual = Math.max(0, Number(usuario.xp) || 0);
+        usuario.xpTotal = (100 * ((nivelAtual - 1) * nivelAtual / 2)) + xpAtual;
+    }
+
+    if (!Array.isArray(usuario.inventario)) usuario.inventario = [];
+    if (typeof usuario.ultimoDaily !== 'number') usuario.ultimoDaily = 0;
+    if (typeof usuario.ultimoWork !== 'number') usuario.ultimoWork = 0;
+    if (typeof usuario.pontosDiversao !== 'number') usuario.pontosDiversao = 0;
+    if (!usuario.metasConcluidas) usuario.metasConcluidas = {};
+    if (!usuario.adivinha) usuario.adivinha = null;
+
+    return usuario;
 
 }
 
@@ -1423,28 +1473,41 @@ function adicionarXP(
     quantidade
 ) {
 
-    const usuario =
-        obterUsuario(
-            guildId,
-            userId
-        );
+    const usuario = obterUsuario(guildId, userId);
+    const valor = Math.max(0, Number(quantidade) || 0);
 
-    usuario.xp += quantidade;
+    usuario.xp += valor;
+    usuario.xpTotal += valor;
 
-    while (
-        usuario.xp >=
-        usuario.nivel * 100
-    ) {
-
-        usuario.xp -=
-            usuario.nivel * 100;
-
+    while (usuario.xp >= usuario.nivel * 100) {
+        usuario.xp -= usuario.nivel * 100;
         usuario.nivel++;
-
     }
 
     salvarDados();
 
+}
+
+function obterSaldoXP(guildId, userId) {
+    return Math.max(0, obterUsuario(guildId, userId).xpTotal || 0);
+}
+
+function gastarXP(guildId, userId, quantidade) {
+    const usuario = obterUsuario(guildId, userId);
+    const valor = Math.max(0, Number(quantidade) || 0);
+    if (usuario.xpTotal < valor) return false;
+    usuario.xpTotal -= valor;
+    // Recalcula progresso/nível sem permitir nível menor que 1.
+    let restante = usuario.xpTotal;
+    let nivel = 1;
+    while (restante >= nivel * 100) {
+        restante -= nivel * 100;
+        nivel++;
+    }
+    usuario.nivel = nivel;
+    usuario.xp = restante;
+    salvarDados();
+    return true;
 }
 
 // ======================================================
@@ -1720,6 +1783,110 @@ function divorciar(
 
     return parceiroId;
 
+}
+
+// ======================================================
+// PAINEL VIP E TICKETS
+// ======================================================
+async function enviarPainelVIP(guild) {
+    const canal = await guild.channels.fetch(CANAL_VIP).catch(() => null);
+    if (!canal || !canal.isTextBased()) return;
+
+    const mensagens = await canal.messages.fetch({ limit: 50 }).catch(() => null);
+    if (mensagens?.some(m => m.author.id === client.user.id && m.embeds.some(e => e.title === '💎 LOJA VIP — RAVEN'))) return;
+
+    const embed = new EmbedBuilder()
+        .setTitle('💎 LOJA VIP — RAVEN')
+        .setDescription(
+            'Escolha o VIP que deseja adquirir.
+
+' +
+            '**💎 Prata** — 15.000 XP ou R$ 20
+' +
+            '**🥇 Ouro** — 20.000 XP ou R$ 25
+' +
+            '**💎 Diamante** — 30.000 XP ou R$ 35
+' +
+            '**👑 Magnata** — 70.000 XP ou R$ 50
+' +
+            '**🖤 Black** — 100.000 XP ou R$ 90
+' +
+            '**✨ Legendery** — 150.000 XP ou R$ 150
+
+' +
+            'Clique em um botão para abrir um ticket privado. Dentro do ticket você escolherá **XP ou Pix**.'
+        )
+        .setThumbnail(guild.iconURL({ extension: 'png', size: 256 }) || null)
+        .setFooter({ text: 'Raven • Sistema VIP' })
+        .setTimestamp();
+
+    const row1 = new ActionRowBuilder().addComponents(
+        ...['prata','ouro','diamante'].map(k => new ButtonBuilder().setCustomId(`vip_comprar_${k}`).setLabel(VIP_COMPRAS[k].nome).setEmoji(VIP_COMPRAS[k].emoji).setStyle(ButtonStyle.Primary))
+    );
+    const row2 = new ActionRowBuilder().addComponents(
+        ...['magnata','black','legendary'].map(k => new ButtonBuilder().setCustomId(`vip_comprar_${k}`).setLabel(VIP_COMPRAS[k].nome).setEmoji(VIP_COMPRAS[k].emoji).setStyle(ButtonStyle.Secondary))
+    );
+
+    await canal.send({ embeds: [embed], components: [row1, row2] });
+}
+
+async function criarTicketVIP(interaction, chave) {
+    const vip = VIP_COMPRAS[chave];
+    if (!vip) return;
+    const guild = interaction.guild;
+    const existente = guild.channels.cache.find(c => c.topic === `vip-ticket:${interaction.user.id}`);
+    if (existente) {
+        return interaction.reply({ content: `❌ Você já possui um ticket VIP aberto: ${existente}`, ephemeral: true });
+    }
+
+    const categoria = await guild.channels.fetch(CATEGORIA_TICKETS).catch(() => null);
+    if (!categoria) return interaction.reply({ content: '❌ A categoria de tickets não foi encontrada.', ephemeral: true });
+
+    const nome = `vip-${chave}-${interaction.user.username.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 60)}`;
+    const canal = await guild.channels.create({
+        name: nome,
+        type: ChannelType.GuildText,
+        parent: categoria.id,
+        topic: `vip-ticket:${interaction.user.id}`,
+        permissionOverwrites: [
+            { id: guild.roles.everyone.id, deny: ['ViewChannel'] },
+            { id: interaction.user.id, allow: ['ViewChannel','SendMessages','ReadMessageHistory'] },
+            { id: CARGO_SUPORTE, allow: ['ViewChannel','SendMessages','ReadMessageHistory','ManageMessages'] },
+            { id: client.user.id, allow: ['ViewChannel','SendMessages','ReadMessageHistory','ManageChannels'] }
+        ]
+    });
+
+    const embed = new EmbedBuilder()
+        .setTitle(`🎫 Compra — ${vip.nome}`)
+        .setDescription(`Olá ${interaction.user}!
+
+Você escolheu **${vip.nome}**.
+
+💎 **Preço em XP:** ${vip.xp.toLocaleString('pt-BR')} XP
+💰 **Preço no Pix:** R$ ${vip.preco.toFixed(2).replace('.', ',')}
+
+Escolha abaixo como deseja pagar.`)
+        .setTimestamp();
+
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`vip_pagar_xp_${chave}`).setLabel('Pagar com XP').setEmoji('⭐').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`vip_pagar_pix_${chave}`).setLabel('Pagar com Pix').setEmoji('💳').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`vip_cancelar_${chave}`).setLabel('Cancelar').setEmoji('🗑️').setStyle(ButtonStyle.Danger)
+    );
+
+    await canal.send({ content: `${interaction.user} <@&${CARGO_SUPORTE}>`, embeds: [embed], components: [row] });
+    await interaction.reply({ content: `✅ Seu ticket foi criado: ${canal}`, ephemeral: true });
+}
+
+async function entregarVIP(guild, userId, chave) {
+    const vip = VIP_COMPRAS[chave];
+    const member = await guild.members.fetch(userId);
+    if (!member) throw new Error('Membro não encontrado.');
+    const role = await guild.roles.fetch(vip.cargoId);
+    if (!role) throw new Error('Cargo VIP não encontrado.');
+    if (role.position >= guild.members.me.roles.highest.position) throw new Error('O cargo VIP está acima do cargo do bot.');
+    await member.roles.add(role, `Compra ${vip.nome}`);
+    return role;
 }
 
 // ======================================================
@@ -2273,6 +2440,35 @@ const comandos = [
             'Mostra o status da proteção.'
         )
 
+    // ==================================================
+    // ECONOMIA / DIVERSÃO / UTILIDADES
+    // ==================================================
+
+    new SlashCommandBuilder().setName('cl').setDescription('Apaga suas mensagens anteriores somente neste canal.').addIntegerOption(o => o.setName('quantidade').setDescription('Quantidade; deixe vazio para limpar o máximo possível.').setMinValue(1).setMaxValue(1000)),
+
+    new SlashCommandBuilder().setName('addxp').setDescription('Adiciona XP a um usuário.').addUserOption(o => o.setName('usuario').setDescription('Usuário').setRequired(true)).addIntegerOption(o => o.setName('quantidade').setDescription('Quantidade de XP').setRequired(true).setMinValue(1).setMaxValue(1000000)),
+    new SlashCommandBuilder().setName('removexp').setDescription('Remove XP de um usuário.').addUserOption(o => o.setName('usuario').setDescription('Usuário').setRequired(true)).addIntegerOption(o => o.setName('quantidade').setDescription('Quantidade de XP').setRequired(true).setMinValue(1).setMaxValue(1000000)),
+    new SlashCommandBuilder().setName('saldo').setDescription('Mostra seu saldo de XP.'),
+    new SlashCommandBuilder().setName('daily').setDescription('Resgata sua recompensa diária de XP.'),
+    new SlashCommandBuilder().setName('work').setDescription('Trabalha e recebe XP.'),
+    new SlashCommandBuilder().setName('transferir').setDescription('Transfere XP para outro usuário.').addUserOption(o => o.setName('usuario').setDescription('Destinatário').setRequired(true)).addIntegerOption(o => o.setName('quantidade').setDescription('XP').setRequired(true).setMinValue(1)),
+    new SlashCommandBuilder().setName('loja').setDescription('Mostra a loja e os VIPs disponíveis.'),
+    new SlashCommandBuilder().setName('comprar').setDescription('Compra um item da loja com XP.').addStringOption(o => o.setName('item').setDescription('Item').setRequired(true).addChoices(
+        { name: 'VIP Prata', value: 'vip_prata' }, { name: 'VIP Ouro', value: 'vip_ouro' }, { name: 'VIP Diamante', value: 'vip_diamante' },
+        { name: 'VIP Magnata', value: 'vip_magnata' }, { name: 'VIP Black', value: 'vip_black' }, { name: 'VIP Legendery', value: 'vip_legendary' }
+    )),
+    new SlashCommandBuilder().setName('inventario').setDescription('Mostra seu inventário.'),
+    new SlashCommandBuilder().setName('ricos').setDescription('Mostra o ranking dos mais ricos em XP.'),
+    new SlashCommandBuilder().setName('metas').setDescription('Mostra suas metas de XP e participação.'),
+
+    new SlashCommandBuilder().setName('8ball').setDescription('Faça uma pergunta para a bola 8.').addStringOption(o => o.setName('pergunta').setDescription('Sua pergunta').setRequired(true).setMaxLength(200)),
+    new SlashCommandBuilder().setName('caraoucoroa').setDescription('Joga cara ou coroa.'),
+    new SlashCommandBuilder().setName('dados').setDescription('Rola dados.').addIntegerOption(o => o.setName('lados').setDescription('Quantidade de lados').setMinValue(2).setMaxValue(100)),
+    new SlashCommandBuilder().setName('adivinha').setDescription('Tente adivinhar um número de 1 a 10.').addIntegerOption(o => o.setName('palpite').setDescription('Seu palpite').setRequired(true).setMinValue(1).setMaxValue(10)),
+    new SlashCommandBuilder().setName('rankingdiversao').setDescription('Mostra o ranking de diversão.'),
+
+    new SlashCommandBuilder().setName('vip-painel').setDescription('Envia/atualiza o painel de compras VIP no canal VIP.')
+
 ].map(c => c.toJSON());
 
 // ======================================================
@@ -2284,6 +2480,10 @@ client.once(
     async () => {
 
         carregarDados();
+
+        for (const guild of client.guilds.cache.values()) {
+            enviarPainelVIP(guild).catch(e => console.log('❌ Erro no painel VIP:', e));
+        }
 
         console.log(
             `🤖 ${client.user.tag} está online!`
@@ -2665,18 +2865,80 @@ client.on(
 
         try {
 
-            if (
-                !interaction.isChatInputCommand()
-            ) {
+            if (!interaction.guild) return;
+
+            // ==================================================
+            // BOTÕES VIP / TICKETS
+            // ==================================================
+            if (interaction.isButton()) {
+                const id = interaction.customId;
+
+                if (id.startsWith('vip_comprar_')) {
+                    return criarTicketVIP(interaction, id.replace('vip_comprar_', ''));
+                }
+
+                if (id.startsWith('vip_pagar_xp_')) {
+                    const chave = id.replace('vip_pagar_xp_', '');
+                    const vip = VIP_COMPRAS[chave];
+                    if (!vip) return interaction.reply({ content: '❌ VIP inválido.', ephemeral: true });
+                    if (obterSaldoXP(interaction.guild.id, interaction.user.id) < vip.xp) return interaction.reply({ content: `❌ Você precisa de **${vip.xp.toLocaleString('pt-BR')} XP**. Seu saldo é **${obterSaldoXP(interaction.guild.id, interaction.user.id).toLocaleString('pt-BR')} XP**.`, ephemeral: true });
+                    if (!gastarXP(interaction.guild.id, interaction.user.id, vip.xp)) return interaction.reply({ content: '❌ Não foi possível descontar seu XP.', ephemeral: true });
+                    try {
+                        const role = await entregarVIP(interaction.guild, interaction.user.id, chave);
+                        await interaction.reply({ content: `✅ Compra aprovada! Você recebeu ${role}. **${vip.xp.toLocaleString('pt-BR')} XP** foram descontados.`, ephemeral: false });
+                        await enviarLog(interaction.guild, '💎 VIP comprado com XP', `${interaction.user} comprou ${vip.nome} por ${vip.xp} XP.`);
+                    } catch (e) {
+                        adicionarXP(interaction.guild.id, interaction.user.id, vip.xp);
+                        return interaction.reply({ content: `❌ Não consegui entregar o VIP. Seu XP foi devolvido.
+${e.message}`, ephemeral: true });
+                    }
+                    setTimeout(() => interaction.channel.delete('Ticket VIP concluído').catch(() => null), 5000);
+                    return;
+                }
+
+                if (id.startsWith('vip_pagar_pix_')) {
+                    const chave = id.replace('vip_pagar_pix_', '');
+                    const vip = VIP_COMPRAS[chave];
+                    return interaction.reply({ content: `💳 **Pagamento via Pix — ${vip.nome}**
+
+Valor: **R$ ${vip.preco.toFixed(2).replace('.', ',')}**
+Chave Pix: \`${PIX_KEY}\`
+
+Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`vip_aprovar_pix_${chave}`).setLabel('Aprovar Pix (Equipe)').setEmoji('✅').setStyle(ButtonStyle.Success))] });
+                }
+
+                if (id.startsWith('vip_aprovar_pix_')) {
+                    if (!interaction.member.roles.cache.has(CARGO_SUPORTE) && !interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: '❌ Apenas a equipe pode aprovar pagamentos.', ephemeral: true });
+                    const chave = id.replace('vip_aprovar_pix_', '');
+                    const vip = VIP_COMPRAS[chave];
+                    const ticketUserId = interaction.channel?.topic?.replace('vip-ticket:', '');
+                    if (!ticketUserId) return interaction.reply({ content: '❌ Não consegui identificar o comprador.', ephemeral: true });
+                    try {
+                        const role = await entregarVIP(interaction.guild, ticketUserId, chave);
+                        await interaction.reply({ content: `✅ Pagamento aprovado. ${role} entregue a <@${ticketUserId}>.` });
+                        await enviarLog(interaction.guild, '💳 VIP comprado via Pix', `${interaction.user} aprovou ${vip.nome} para <@${ticketUserId}>.`);
+                        setTimeout(() => interaction.channel.delete('Ticket VIP concluído').catch(() => null), 5000);
+                    } catch (e) { return interaction.reply({ content: `❌ Erro: ${e.message}`, ephemeral: true }); }
+                    return;
+                }
+
+                if (id.startsWith('vip_cancelar_')) {
+                    await interaction.reply({ content: '🗑️ Ticket encerrado.', ephemeral: true });
+                    setTimeout(() => interaction.channel.delete('Ticket VIP cancelado').catch(() => null), 1500);
+                    return;
+                }
                 return;
             }
 
-            if (!interaction.guild) {
-                return;
-            }
+            if (!interaction.isChatInputCommand()) return;
 
-            const comando =
-                interaction.commandName;
+            const comando = interaction.commandName;
+
+            if (comando === 'vip-painel') {
+                if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: '❌ Você precisa da permissão Gerenciar Servidor.', ephemeral: true });
+                await enviarPainelVIP(interaction.guild);
+                return interaction.reply({ content: `✅ Painel VIP enviado/verificado em <#${CANAL_VIP}>.`, ephemeral: true });
+            }
 
             // ==================================================
             // VERIFICAR CANAL
@@ -2695,6 +2957,89 @@ client.on(
                     ephemeral: true
                 });
 
+            }
+
+            // ==================================================
+            // /CL — LIMPAR APENAS AS MENSAGENS DO AUTOR NESTE CANAL
+            // ==================================================
+            if (comando === 'cl') {
+                if (!interaction.channel?.isTextBased()) return interaction.reply({ content: '❌ Este comando precisa ser usado em um canal de texto.', ephemeral: true });
+                if (!interaction.channel.permissionsFor(interaction.guild.members.me).has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: '❌ Preciso da permissão Gerenciar Mensagens neste canal.', ephemeral: true });
+                const quantidade = interaction.options.getInteger('quantidade');
+                await interaction.reply({ content: '🧹 Limpando suas mensagens neste canal...', ephemeral: true });
+                let restantes = quantidade || Infinity;
+                let antesDe = null;
+                let apagadas = 0;
+                while (restantes > 0) {
+                    const lote = await interaction.channel.messages.fetch({ limit: 100, ...(antesDe ? { before: antesDe } : {}) }).catch(() => null);
+                    if (!lote || lote.size === 0) break;
+                    const minhas = [...lote.values()].filter(m => m.author.id === interaction.user.id && m.id !== interaction.id).slice(0, restantes === Infinity ? 100 : restantes);
+                    for (const msg of minhas) {
+                        await msg.delete().then(() => apagadas++).catch(() => null);
+                        if (restantes !== Infinity) restantes--;
+                    }
+                    antesDe = lote.last().id;
+                    if (lote.size < 100 || (quantidade && restantes <= 0)) break;
+                }
+                return interaction.editReply(`🧹 Foram apagadas **${apagadas}** mensagens suas neste canal.`);
+            }
+
+            // ==================================================
+            // ECONOMIA
+            // ==================================================
+            if (['saldo','daily','work','transferir','loja','comprar','inventario','ricos','metas'].includes(comando)) {
+                const user = obterUsuario(interaction.guild.id, interaction.user.id);
+                if (comando === 'saldo') return interaction.reply(`💰 Seu saldo: **${obterSaldoXP(interaction.guild.id, interaction.user.id).toLocaleString('pt-BR')} XP**
+⭐ Nível: **${user.nivel}**`);
+                if (comando === 'daily') {
+                    const agora = Date.now(); const cd = 24*60*60*1000;
+                    if (agora - user.ultimoDaily < cd) return interaction.reply({ content: `⏳ Você já pegou sua recompensa diária. Volte <t:${Math.floor((user.ultimoDaily+cd)/1000)}:R>.`, ephemeral: true });
+                    user.ultimoDaily = agora; adicionarXP(interaction.guild.id, interaction.user.id, 500); return interaction.reply('🎁 **Daily resgatada!** Você recebeu **500 XP**.');
+                }
+                if (comando === 'work') {
+                    const agora = Date.now(); const cd = 60*60*1000;
+                    if (agora - user.ultimoWork < cd) return interaction.reply({ content: `⏳ Você já trabalhou. Tente novamente <t:${Math.floor((user.ultimoWork+cd)/1000)}:R>.`, ephemeral: true });
+                    const ganho = Math.floor(Math.random()*201)+100; user.ultimoWork=agora; adicionarXP(interaction.guild.id, interaction.user.id, ganho); return interaction.reply(`💼 Você trabalhou e recebeu **${ganho} XP**!`);
+                }
+                if (comando === 'transferir') {
+                    const alvo=interaction.options.getUser('usuario'); const qtd=interaction.options.getInteger('quantidade');
+                    if (alvo.bot || alvo.id===interaction.user.id) return interaction.reply({ content:'❌ Escolha outro membro que não seja bot.', ephemeral:true });
+                    if (!gastarXP(interaction.guild.id, interaction.user.id, qtd)) return interaction.reply({ content:'❌ Você não possui XP suficiente.', ephemeral:true });
+                    adicionarXP(interaction.guild.id, alvo.id, qtd); return interaction.reply(`💸 ${interaction.user} transferiu **${qtd.toLocaleString('pt-BR')} XP** para ${alvo}.`);
+                }
+                if (comando === 'loja') return interaction.reply({ embeds:[new EmbedBuilder().setTitle('🛒 Loja Raven').setDescription(Object.values(VIP_COMPRAS).map(v=>`${v.emoji} **${v.nome}** — ${v.xp.toLocaleString('pt-BR')} XP / R$ ${v.preco.toFixed(2).replace('.',',')}`).join('\n')).addFields({name:'Como comprar',value:'Use `/comprar item` para compra direta com XP ou use o painel VIP para abrir um ticket e escolher XP/Pix.'})] });
+                if (comando === 'comprar') {
+                    const item=interaction.options.getString('item').replace('vip_',''); const vip=VIP_COMPRAS[item];
+                    if (!vip) return interaction.reply({content:'❌ Item inválido.',ephemeral:true});
+                    if (!gastarXP(interaction.guild.id, interaction.user.id, vip.xp)) return interaction.reply({content:`❌ Você precisa de ${vip.xp.toLocaleString('pt-BR')} XP.`,ephemeral:true});
+                    try { const role=await entregarVIP(interaction.guild, interaction.user.id, item); return interaction.reply(`✅ Você comprou ${role} por **${vip.xp.toLocaleString('pt-BR')} XP**!`); } catch(e) { adicionarXP(interaction.guild.id, interaction.user.id, vip.xp); return interaction.reply({content:`❌ Compra cancelada: ${e.message}`,ephemeral:true}); }
+                }
+                if (comando === 'inventario') { const inv=user.inventario.length?user.inventario.map(x=>`• ${x}`).join('\n'):'Seu inventário está vazio.'; return interaction.reply(`🎒 **Inventário de ${interaction.user.username}**\n\n${inv}`); }
+                if (comando === 'ricos') { const ranking=Object.entries(dados[interaction.guild.id]||{}).map(([id,u])=>({id,xp:u?.xpTotal||0})).sort((a,b)=>b.xp-a.xp).slice(0,10); return interaction.reply('🏆 **Mais ricos em XP**\n'+(ranking.map((r,i)=>`${i+1}. <@${r.id}> — **${r.xp.toLocaleString('pt-BR')} XP**`).join('\n')||'Ninguém ainda.')); }
+                if (comando === 'metas') { const metas=[1000,5000,15000,30000,70000,100000,150000]; const saldo=obterSaldoXP(interaction.guild.id,interaction.user.id); const linhas=metas.map(m=>`${saldo>=m?'✅':'⬜'} ${m.toLocaleString('pt-BR')} XP${saldo>=m?' — concluída':''}`).join('\n'); return interaction.reply(`🎯 **Metas do servidor**\n\n${linhas}\n\n💡 Continue participando, conversando e usando os sistemas para ganhar XP.`); }
+            }
+
+            // ==================================================
+            // DIVERSÃO
+            // ==================================================
+            if (['8ball','caraoucoroa','dados','adivinha','rankingdiversao'].includes(comando)) {
+                const user=obterUsuario(interaction.guild.id,interaction.user.id);
+                if (comando==='8ball') { user.pontosDiversao+=5; salvarDados(); return interaction.reply(`🎱 ${respostas8Ball[Math.floor(Math.random()*respostas8Ball.length)]}`); }
+                if (comando==='caraoucoroa') { user.pontosDiversao+=5; salvarDados(); return interaction.reply(`🪙 Caiu **${Math.random()<0.5?'Cara':'Coroa'}**!`); }
+                if (comando==='dados') { const lados=interaction.options.getInteger('lados')||6; user.pontosDiversao+=5; salvarDados(); return interaction.reply(`🎲 Você rolou um d${lados}: **${Math.floor(Math.random()*lados)+1}**`); }
+                if (comando==='adivinha') { const palpite=interaction.options.getInteger('palpite'); if (!user.adivinha) user.adivinha=Math.floor(Math.random()*10)+1; if(palpite===user.adivinha){ user.pontosDiversao+=25; user.adivinha=null; adicionarXP(interaction.guild.id,interaction.user.id,100); return interaction.reply('🎉 **Acertou!** Você ganhou **100 XP** e 25 pontos de diversão.'); } user.pontosDiversao+=1; salvarDados(); return interaction.reply(`❌ Errou! O número continua entre 1 e 10. Tente novamente.`); }
+                if (comando==='rankingdiversao') { const ranking=Object.entries(dados[interaction.guild.id]||{}).map(([id,u])=>({id,p:u?.pontosDiversao||0})).sort((a,b)=>b.p-a.p).slice(0,10); return interaction.reply('🎮 **Ranking de diversão**\n'+(ranking.map((r,i)=>`${i+1}. <@${r.id}> — **${r.p} pontos**`).join('\n')||'Ninguém ainda.')); }
+            }
+
+            // ==================================================
+            // ADDXP / REMOVEXP
+            // ==================================================
+            if (comando === 'addxp' || comando === 'removexp') {
+                if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Você precisa da permissão Gerenciar Servidor.',ephemeral:true});
+                const alvo=interaction.options.getUser('usuario'); const qtd=interaction.options.getInteger('quantidade');
+                if(comando==='addxp'){ adicionarXP(interaction.guild.id,alvo.id,qtd); return interaction.reply(`⭐ ${alvo} recebeu **${qtd.toLocaleString('pt-BR')} XP**.`); }
+                if(!gastarXP(interaction.guild.id,alvo.id,qtd)) { const atual=obterSaldoXP(interaction.guild.id,alvo.id); gastarXP(interaction.guild.id,alvo.id,atual); return interaction.reply(`⭐ ${alvo} perdeu **${atual.toLocaleString('pt-BR')} XP** (não possuía ${qtd.toLocaleString('pt-BR')}).`); }
+                return interaction.reply(`⭐ Foram removidos **${qtd.toLocaleString('pt-BR')} XP** de ${alvo}.`);
             }
 
             // ==================================================
@@ -4400,7 +4745,14 @@ client.on(
                     '`/vip excluircargo` — Exclui seu cargo.\n\n' +
 
                     '**🔒 Castigo:**\n' +
-                    '`/castigo-status` — Mostra quanto tempo falta do seu castigo.\n\n' +
+                    '`/castigo-status` — Mostra quanto tempo falta do seu castigo.\n' +
+                    '`/cl [quantidade]` — Apaga suas mensagens anteriores somente neste canal.\n' +
+                    '`/addxp` — Adiciona XP a um usuário (equipe).\n' +
+                    '`/removexp` — Remove XP de um usuário (equipe).\n\n' +
+                    '**💰 ECONOMIA**\n' +
+                    '`/saldo` `/daily` `/work` `/transferir` `/loja` `/comprar` `/inventario` `/ricos` `/metas`\n\n' +
+                    '**🎮 DIVERSÃO**\n' +
+                    '`/8ball` `/caraoucoroa` `/dados` `/adivinha` `/rankingdiversao`\n\n' +
                     '**🛡️ Moderação:**\n' +
                     '`/castigo` — Aplica castigo.\n' +
                     '`/tirarcastigo` — Remove castigo.\n' +
