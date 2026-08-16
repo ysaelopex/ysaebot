@@ -3074,7 +3074,7 @@ ${e.message}`, ephemeral: true });
                     return interaction.reply({ content: `💳 **Pagamento via Pix — ${vip.nome}**
 
 Valor: **R$ ${vip.preco.toFixed(2).replace('.', ',')}**
-Chave Pix: \`${🔑 A chave Pix será enviada manualmente pela equipe depois que um atendente assumir este ticket.}\`
+Chave Pix: 🔑 A chave Pix será enviada manualmente pela equipe depois que um atendente assumir este ticket.
 
 Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`vip_aprovar_pix_${chave}`).setLabel('Aprovar Pix (Equipe)').setEmoji('✅').setStyle(ButtonStyle.Success))] });
                 }
