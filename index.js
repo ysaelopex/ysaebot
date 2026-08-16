@@ -2748,46 +2748,6 @@ client.on(
 
             }
 
-            // ==================================================
-            // CARGO AUTOMÁTICO DE ENTRADA
-            // ==================================================
-
-            try {
-                const cargoAutomatico = await guild.roles.fetch(CARGO_AUTOROLE);
-
-                if (!cargoAutomatico) {
-                    console.log(`❌ Cargo automático ${CARGO_AUTOROLE} não foi encontrado.`);
-                    return;
-                }
-
-                const botMember = guild.members.me;
-
-                if (!botMember) {
-                    console.log('❌ Não foi possível localizar o membro do bot no servidor.');
-                    return;
-                }
-
-                if (cargoAutomatico.position >= botMember.roles.highest.position) {
-                    console.log(`❌ Não posso adicionar o cargo automático ${CARGO_AUTOROLE}: ele está acima ou no mesmo nível do maior cargo do bot.`);
-                    return;
-                }
-
-                if (!member.roles.cache.has(CARGO_AUTOROLE)) {
-                    await member.roles.add(
-                        cargoAutomatico,
-                        'Cargo automático de entrada no servidor.'
-                    );
-
-                    console.log(`✅ Cargo automático ${CARGO_AUTOROLE} adicionado a ${member.user.tag}.`);
-                }
-
-            } catch (erroCargo) {
-                console.log(
-                    `❌ Erro ao adicionar o cargo automático ${CARGO_AUTOROLE} a ${member.user.tag}:`,
-                    erroCargo
-                );
-            }
-
         } catch (erro) {
 
             console.log(
