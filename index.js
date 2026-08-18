@@ -44,8 +44,8 @@ const CANAL_VIP = '1538611994926514198';
 const CATEGORIA_TICKETS = '1538290771843752067';
 
 const VIP_COMPRAS = {
-    prata: { nome: 'VIP Prata', cargoId: '1538379784827043880', xp: 15000, preco: 20, emoji: '💎' },
-    ouro: { nome: 'VIP Ouro', cargoId: '1538379970253033633', xp: 20000, preco: 25, emoji: '🥇' },
+    prata: { nome: 'VIP Prata', cargoId: '1538379784827043880', xp: 1000, preco: 20, emoji: '💎' },
+    ouro: { nome: 'VIP Ouro', cargoId: '1538379970253033633', xp: 1000, preco: 25, emoji: '🥇' },
     diamante: { nome: 'VIP Diamante', cargoId: '1538380206476103761', xp: 30000, preco: 35, emoji: '💎' },
     magnata: { nome: 'VIP Magnata', cargoId: '1538380498789994598', xp: 70000, preco: 50, emoji: '👑' },
     black: { nome: 'VIP Black', cargoId: '1538380635553538109', xp: 95000, preco: 100, emoji: '🖤' },
@@ -384,7 +384,7 @@ async function registrarVipDetectado(member, chave, inicio = Date.now()) {
 // TOKEN
 // ======================================================
 
-const TOKEN = process.env.DISCORD_TOKEN;
+const TOKEN = "MTUzODI1MDI3MTA1Njk4NjE1Mg.GvyzlP.Y3L6Fe-MYH24x6U2u9bnXj8ppC-5av5C8ePe3M";
 
 // ======================================================
 // PROTEÇÃO
@@ -1611,6 +1611,39 @@ function adicionarXP(
 
     salvarDados();
 
+}
+
+// ======================================================
+// LIMITE DIÁRIO DE XP
+// ======================================================
+
+const LIMITE_XP_DIARIO = 150;
+
+function adicionarXPDiario(guildId, userId, quantidade) {
+    const usuario = obterUsuario(guildId, userId);
+    const agora = new Date();
+    const dataHoje =
+        `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}-${String(agora.getDate()).padStart(2, '0')}`;
+
+    if (usuario.dataXP !== dataHoje) {
+        usuario.dataXP = dataHoje;
+        usuario.xpHoje = 0;
+    }
+
+    const valor = Math.max(0, Number(quantidade) || 0);
+    const restante = Math.max(
+        0,
+        LIMITE_XP_DIARIO - (usuario.xpHoje || 0)
+    );
+    const ganho = Math.min(valor, restante);
+
+    if (ganho > 0) {
+        adicionarXP(guildId, userId, ganho);
+        usuario.xpHoje = (usuario.xpHoje || 0) + ganho;
+        salvarDados();
+    }
+
+    return ganho;
 }
 
 function obterSaldoXP(guildId, userId) {
@@ -3296,12 +3329,17 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                 if (comando === 'daily') {
                     const agora = Date.now(); const cd = 24*60*60*1000;
                     if (agora - user.ultimoDaily < cd) return interaction.reply({ content: `⏳ Você já pegou sua recompensa diária. Volte <t:${Math.floor((user.ultimoDaily+cd)/1000)}:R>.`, ephemeral: true });
-                    user.ultimoDaily = agora; adicionarXP(interaction.guild.id, interaction.user.id, 500); return interaction.reply('🎁 **Daily resgatada!** Você recebeu **500 XP**.');
+                    user.ultimoDaily = agora;
+                    const ganhoDaily = adicionarXPDiario(interaction.guild.id, interaction.user.id, 25);
+                    return interaction.reply(`🎁 **Daily resgatada!** Você recebeu **${ganhoDaily} XP**${ganhoDaily < 25 ? ' (limite diário atingido)' : ''}.`);
                 }
                 if (comando === 'work') {
                     const agora = Date.now(); const cd = 60*60*1000;
                     if (agora - user.ultimoWork < cd) return interaction.reply({ content: `⏳ Você já trabalhou. Tente novamente <t:${Math.floor((user.ultimoWork+cd)/1000)}:R>.`, ephemeral: true });
-                    const ganho = Math.floor(Math.random()*201)+100; user.ultimoWork=agora; adicionarXP(interaction.guild.id, interaction.user.id, ganho); return interaction.reply(`💼 Você trabalhou e recebeu **${ganho} XP**!`);
+                    const ganho = Math.floor(Math.random()*31)+20;
+                    user.ultimoWork=agora;
+                    const ganhoWork = adicionarXPDiario(interaction.guild.id, interaction.user.id, ganho);
+                    return interaction.reply(`💼 Você trabalhou e recebeu **${ganhoWork} XP**${ganhoWork < ganho ? ' (limite diário atingido)' : ''}!`);
                 }
                 if (comando === 'transferir') {
                     const alvo=interaction.options.getUser('usuario'); const qtd=interaction.options.getInteger('quantidade');
@@ -3329,7 +3367,9 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                 if (comando==='8ball') { user.pontosDiversao+=5; salvarDados(); return interaction.reply(`🎱 ${respostas8Ball[Math.floor(Math.random()*respostas8Ball.length)]}`); }
                 if (comando==='caraoucoroa') { user.pontosDiversao+=5; salvarDados(); return interaction.reply(`🪙 Caiu **${Math.random()<0.5?'Cara':'Coroa'}**!`); }
                 if (comando==='dados') { const lados=interaction.options.getInteger('lados')||6; user.pontosDiversao+=5; salvarDados(); return interaction.reply(`🎲 Você rolou um d${lados}: **${Math.floor(Math.random()*lados)+1}**`); }
-                if (comando==='adivinha') { const palpite=interaction.options.getInteger('palpite'); if (!user.adivinha) user.adivinha=Math.floor(Math.random()*10)+1; if(palpite===user.adivinha){ user.pontosDiversao+=25; user.adivinha=null; adicionarXP(interaction.guild.id,interaction.user.id,100); return interaction.reply('🎉 **Acertou!** Você ganhou **100 XP** e 25 pontos de diversão.'); } user.pontosDiversao+=1; salvarDados(); return interaction.reply(`❌ Errou! O número continua entre 1 e 10. Tente novamente.`); }
+                if (comando==='adivinha') { const palpite=interaction.options.getInteger('palpite'); if (!user.adivinha) user.adivinha=Math.floor(Math.random()*10)+1; if(palpite===user.adivinha){ user.pontosDiversao+=25; user.adivinha=null;
+                    const ganhoAdivinha = adicionarXPDiario(interaction.guild.id,interaction.user.id,25);
+                    return interaction.reply(`🎉 **Acertou!** Você ganhou **${ganhoAdivinha} XP** e 25 pontos de diversão${ganhoAdivinha < 25 ? ' (limite diário atingido)' : ''}.`); } user.pontosDiversao+=1; salvarDados(); return interaction.reply(`❌ Errou! O número continua entre 1 e 10. Tente novamente.`); }
                 if (comando==='rankingdiversao') { const ranking=Object.entries(dados[interaction.guild.id]||{}).map(([id,u])=>({id,p:u?.pontosDiversao||0})).sort((a,b)=>b.p-a.p).slice(0,10); return interaction.reply('🎮 **Ranking de diversão**\n'+(ranking.map((r,i)=>`${i+1}. <@${r.id}> — **${r.p} pontos**`).join('\n')||'Ninguém ainda.')); }
             }
 
@@ -4544,16 +4584,16 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                     alvo.id
                 );
 
-                adicionarXP(
+                const ganhoCasamentoAutor = adicionarXPDiario(
                     interaction.guild.id,
                     interaction.user.id,
-                    50
+                    10
                 );
 
-                adicionarXP(
+                const ganhoCasamentoAlvo = adicionarXPDiario(
                     interaction.guild.id,
                     alvo.id,
-                    50
+                    10
                 );
 
                 await enviarLog(
@@ -4564,7 +4604,7 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
 
                 return interaction.reply(
                     `💍 ${interaction.user} e ${alvo} agora estão casados! ❤️\n\n` +
-                    `⭐ **+50 XP para cada um!**`
+                    `⭐ **+10 XP para cada um!**`
                 );
 
             }
@@ -4620,53 +4660,52 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                 beijo: {
                     emoji: '💋',
                     texto: 'deu um beijo em',
-                    xp: 15
+                    xp: 5
                 },
 
                 abraco: {
                     emoji: '🤗',
                     texto: 'deu um abraço em',
-                    xp: 10
+                    xp: 3
                 },
 
                 carinho: {
                     emoji: '🖤',
                     texto: 'demonstrou carinho por',
-                    xp: 10
+                    xp: 3
                 },
 
                 presente: {
                     emoji: '🎁',
                     texto: 'deu um presente para',
-                    xp: 20
+                    xp: 5
                 },
 
                 amizade: {
                     emoji: '🤝',
                     texto: 'fez amizade com',
-                    xp: 10
+                    xp: 3
                 },
 
                 tapa: {
                     emoji: '👋',
                     texto: 'deu um tapa de brincadeira em',
-                    xp: 5
+                    xp: 1
                 },
 
                 gf: {
                     emoji: '💞',
                     texto: 'fez um GF com',
-                    xp: 25,
+                    xp: 5,
                     chanceFalha: 0.30
                 },
 
                 xcam: {
                     emoji: '💞',
                     texto: 'fez um XCAM com',
-                    xp: 25,
+                    xp: 5,
                     chanceFalha: 0.30
                 }
-
             };
 
             if (
@@ -4777,10 +4816,10 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
 
                     }
 
-                    adicionarXP(
+                    const ganhoInteracaoEspecial = adicionarXPDiario(
                         interaction.guild.id,
                         interaction.user.id,
-                        25
+                        5
                     );
 
                     adicionarXPRelacionamento(
@@ -4792,14 +4831,14 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
 
                     return interaction.reply(
                         `💞 ${interaction.user} fez um ${comando.toUpperCase()} com ${alvo}!\n\n` +
-                        `⭐ **+25 XP**\n` +
+                        `⭐ **+${ganhoInteracaoEspecial} XP**\n` +
                         `❤️ **+25 XP de relacionamento!**\n` +
                         `⏳ Você poderá usar novamente daqui a **1 hora**.`
                     );
 
                 }
 
-                adicionarXP(
+                const ganhoInteracao = adicionarXPDiario(
                     interaction.guild.id,
                     interaction.user.id,
                     info.xp
@@ -4824,7 +4863,7 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
 
                 let mensagem =
                     `${info.emoji} ${interaction.user} ${info.texto} ${alvo}!\n\n` +
-                    `⭐ **+${info.xp} XP**`;
+                    `⭐ **+${ganhoInteracao} XP**`;
 
                 if (parceiro) {
 
@@ -5773,10 +5812,10 @@ client.on(
 
             usuario.mensagens++;
 
-            adicionarXP(
+            adicionarXPDiario(
                 guildId,
                 message.author.id,
-                5
+                1
             );
 
             salvarDados();
