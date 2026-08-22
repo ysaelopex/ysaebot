@@ -44,12 +44,12 @@ const CANAL_VIP = '1538611994926514198';
 const CATEGORIA_TICKETS = '1538290771843752067';
 
 const VIP_COMPRAS = {
-    prata: { nome: 'VIP Prata', cargoId: '1538379784827043880', xp: 1000, preco: 20, emoji: '💎' },
-    ouro: { nome: 'VIP Ouro', cargoId: '1538379970253033633', xp: 1000, preco: 25, emoji: '🥇' },
-    diamante: { nome: 'VIP Diamante', cargoId: '1538380206476103761', xp: 30000, preco: 35, emoji: '💎' },
-    magnata: { nome: 'VIP Magnata', cargoId: '1538380498789994598', xp: 70000, preco: 50, emoji: '👑' },
-    black: { nome: 'VIP Black', cargoId: '1538380635553538109', xp: 95000, preco: 100, emoji: '🖤' },
-    legendary: { nome: 'VIP Legendery', cargoId: '1538380285551452222', xp: 140000, preco: 145, emoji: '✨' }
+    prata: { nome: 'VIP Prata', cargoId: '1538379784827043880', xp: 30000, preco: 15, emoji: '💎' },
+    ouro: { nome: 'VIP Ouro', cargoId: '1538379970253033633', xp: 40000, preco: 20, emoji: '🥇' },
+    diamante: { nome: 'VIP Diamante', cargoId: '1538380206476103761', xp: 60000, preco: 30, emoji: '💎' },
+    magnata: { nome: 'VIP Magnata', cargoId: '1538380498789994598', xp: 100000, preco: 50, emoji: '👑' },
+    black: { nome: 'VIP Black', cargoId: '1538380635553538109', xp: 200000, preco: 100, emoji: '🖤' },
+    legendary: { nome: 'VIP Legendary', cargoId: '1538380285551452222', xp: 300000, preco: 150, emoji: '✨' }
 };
 
 const COOLDOWN_FUN = 5000;
@@ -384,7 +384,7 @@ async function registrarVipDetectado(member, chave, inicio = Date.now()) {
 // TOKEN
 // ======================================================
 
-const TOKEN = "MTUzODI1MDI3MTA1Njk4NjE1Mg.GvyzlP.Y3L6Fe-MYH24x6U2u9bnXj8ppC-5av5C8ePe3M";
+const TOKEN = "COLOQUE_SEU_TOKEN_AQUI";
 
 // ======================================================
 // PROTEÇÃO
@@ -477,6 +477,19 @@ function carregarDados() {
 // ======================================================
 // SALVAR DADOS
 // ======================================================
+
+function recalcularNiveisPorXPTotal() {
+    for (const guildDados of Object.values(dados)) {
+        if (!guildDados || typeof guildDados !== 'object') continue;
+        for (const usuario of Object.values(guildDados)) {
+            if (!usuario || typeof usuario !== 'object') continue;
+            if (typeof usuario.xpTotal !== 'number') continue;
+            const total = Math.max(0, usuario.xpTotal);
+            usuario.nivel = Math.floor(total / XP_PARA_SUBIR_NIVEL) + 1;
+            usuario.xp = total % XP_PARA_SUBIR_NIVEL;
+        }
+    }
+}
 
 function salvarDados() {
 
@@ -779,7 +792,7 @@ function obterUsuario(guildId, userId) {
     if (typeof usuario.xpTotal !== 'number') {
         const nivelAtual = Math.max(1, Number(usuario.nivel) || 1);
         const xpAtual = Math.max(0, Number(usuario.xp) || 0);
-        usuario.xpTotal = (100 * ((nivelAtual - 1) * nivelAtual / 2)) + xpAtual;
+        usuario.xpTotal = (XP_PARA_SUBIR_NIVEL * (nivelAtual - 1)) + xpAtual;
     }
 
     if (!Array.isArray(usuario.inventario)) usuario.inventario = [];
@@ -1656,8 +1669,8 @@ function adicionarXP(
     usuario.xp += valor;
     usuario.xpTotal += valor;
 
-    while (usuario.xp >= usuario.nivel * 100) {
-        usuario.xp -= usuario.nivel * 100;
+    while (usuario.xp >= XP_PARA_SUBIR_NIVEL) {
+        usuario.xp -= XP_PARA_SUBIR_NIVEL;
         usuario.nivel++;
     }
 
@@ -1669,7 +1682,12 @@ function adicionarXP(
 // LIMITE DIÁRIO DE XP
 // ======================================================
 
-const LIMITE_XP_DIARIO = 150;
+const XP_POR_MENSAGEM = 1;
+const XP_DIARIO_RECOMPENSA = 25;
+const XP_WORK_MIN = 15;
+const XP_WORK_MAX = 30;
+const LIMITE_XP_DIARIO = 200;
+const XP_PARA_SUBIR_NIVEL = 10000;
 
 function adicionarXPDiario(guildId, userId, quantidade) {
     const usuario = obterUsuario(guildId, userId);
@@ -1710,8 +1728,8 @@ function gastarXP(guildId, userId, quantidade) {
     // Recalcula progresso/nível sem permitir nível menor que 1.
     let restante = usuario.xpTotal;
     let nivel = 1;
-    while (restante >= nivel * 100) {
-        restante -= nivel * 100;
+    while (restante >= XP_PARA_SUBIR_NIVEL) {
+        restante -= XP_PARA_SUBIR_NIVEL;
         nivel++;
     }
     usuario.nivel = nivel;
@@ -2012,12 +2030,12 @@ async function enviarPainelVIP(guild) {
         .setTitle('💎 LOJA VIP — RAVEN')
         .setDescription(`Escolha o VIP que deseja adquirir.
 
-**💎 Prata** — 15.000 XP ou R$ 20
-**🥇 Ouro** — 20.000 XP ou R$ 25
-**💎 Diamante** — 30.000 XP ou R$ 35
-**👑 Magnata** — 70.000 XP ou R$ 50
-**🖤 Black** — 95.000 XP ou R$ 100
-**✨ Legendery** — 140.000 XP ou R$ 145
+**💎 Prata** — 30.000 XP ou R$ 15,00
+**🥇 Ouro** — 40.000 XP ou R$ 20,00
+**💎 Diamante** — 60.000 XP ou R$ 30,00
+**👑 Magnata** — 100.000 XP ou R$ 50,00
+**🖤 Black** — 200.000 XP ou R$ 100,00
+**✨ Legendary** — 300.000 XP ou R$ 150,00
 
 Clique em um botão para abrir um ticket privado. Dentro do ticket você escolherá **XP ou Pix**.`)
         .setThumbnail(guild.iconURL({ extension: 'png', size: 256 }) || null)
@@ -2165,26 +2183,28 @@ async function verificarPermissaoAdicionarExpressoes(interaction) {
 }
 
 async function adicionarEmojisDoTexto(guild, texto) {
-    const emojis = extrairEmojisPersonalizados(texto);
+    const encontrados = extrairEmojisPersonalizados(texto);
+    const urls = String(texto || '').match(/https?:\/\/[^\s<>]+\.(?:png|gif|webp)(?:\?[^\s<>]*)?/gi) || [];
 
-    if (!emojis.length) {
+    if (!encontrados.length && !urls.length) {
         return {
             adicionados: [],
             erros: [],
-            ignorados: ['Nenhum emoji personalizado foi encontrado. Use, por exemplo, <:nome:ID> ou <a:nome:ID>.']
+            ignorados: ['Nenhum emoji personalizado foi encontrado. Use <:nome:ID> ou <a:nome:ID>. Emojis Unicode como 😀 não podem ser importados como emoji personalizado.']
         };
     }
 
     const adicionados = [];
     const erros = [];
     const ignorados = [];
+    const processados = new Set();
 
-    for (const emoji of emojis) {
-        const existente = guild.emojis.cache.find(e =>
-            e.name === emoji.nome
-        );
+    for (const emoji of encontrados) {
+        const chave = `${emoji.nome}:${emoji.id}`;
+        if (processados.has(chave)) continue;
+        processados.add(chave);
 
-        if (existente) {
+        if (guild.emojis.cache.some(e => e.name === emoji.nome)) {
             ignorados.push(`${emoji.nome} (já existe no servidor)`);
             continue;
         }
@@ -2192,22 +2212,38 @@ async function adicionarEmojisDoTexto(guild, texto) {
         try {
             const extensao = emoji.animado ? 'gif' : 'png';
             const url = `https://cdn.discordapp.com/emojis/${emoji.id}.${extensao}`;
-
             const criado = await guild.emojis.create({
                 attachment: url,
                 name: limparNomeEmoji(emoji.nome),
                 reason: 'Emoji adicionado pelo comando /addemoji'
             });
-
             adicionados.push(criado.toString());
         } catch (erro) {
             erros.push(`${emoji.nome}: ${erro.message}`);
         }
     }
 
+    for (const [index, url] of urls.entries()) {
+        try {
+            const base = url.split('?')[0].split('/').pop()?.split('.')[0] || `emoji_${index + 1}`;
+            const nome = limparNomeEmoji(base, `emoji_${index + 1}`);
+            if (guild.emojis.cache.some(e => e.name === nome)) {
+                ignorados.push(`${nome} (já existe no servidor)`);
+                continue;
+            }
+            const criado = await guild.emojis.create({
+                attachment: url,
+                name: nome,
+                reason: 'Emoji adicionado pelo comando /addemoji'
+            });
+            adicionados.push(criado.toString());
+        } catch (erro) {
+            erros.push(`URL ${index + 1}: ${erro.message}`);
+        }
+    }
+
     return { adicionados, erros, ignorados };
 }
-
 async function adicionarFigurinha(guild, sticker) {
     const nome = limparNomeFigurinha(sticker.name, `figurinha_${Date.now()}`);
 
@@ -2834,6 +2870,7 @@ const comandos = [
         .setName('addemoji')
         .setDescription('Adiciona emojis personalizados ao servidor.')
         .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+        .setDMPermission(false)
         .addStringOption(o =>
             o
                 .setName('emojis')
@@ -2845,7 +2882,8 @@ const comandos = [
     new SlashCommandBuilder()
         .setName('addfigurinha')
         .setDescription('Ativa o modo para adicionar as próximas figurinhas enviadas.')
-        .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator),
+        .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+        .setDMPermission(false),
 
     new SlashCommandBuilder()
         .setName('stop')
@@ -3604,13 +3642,13 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                     const agora = Date.now(); const cd = 24*60*60*1000;
                     if (agora - user.ultimoDaily < cd) return interaction.reply({ content: `⏳ Você já pegou sua recompensa diária. Volte <t:${Math.floor((user.ultimoDaily+cd)/1000)}:R>.`, ephemeral: true });
                     user.ultimoDaily = agora;
-                    const ganhoDaily = adicionarXPDiario(interaction.guild.id, interaction.user.id, 25);
-                    return interaction.reply(`🎁 **Daily resgatada!** Você recebeu **${ganhoDaily} XP**${ganhoDaily < 25 ? ' (limite diário atingido)' : ''}.`);
+                    const ganhoDaily = adicionarXPDiario(interaction.guild.id, interaction.user.id, XP_DIARIO_RECOMPENSA);
+                    return interaction.reply(`🎁 **Daily resgatada!** Você recebeu **${ganhoDaily} XP**${ganhoDaily < XP_DIARIO_RECOMPENSA ? ' (limite diário atingido)' : ''}.`);
                 }
                 if (comando === 'work') {
                     const agora = Date.now(); const cd = 60*60*1000;
                     if (agora - user.ultimoWork < cd) return interaction.reply({ content: `⏳ Você já trabalhou. Tente novamente <t:${Math.floor((user.ultimoWork+cd)/1000)}:R>.`, ephemeral: true });
-                    const ganho = Math.floor(Math.random()*31)+20;
+                    const ganho = Math.floor(Math.random() * (XP_WORK_MAX - XP_WORK_MIN + 1)) + XP_WORK_MIN;
                     user.ultimoWork=agora;
                     const ganhoWork = adicionarXPDiario(interaction.guild.id, interaction.user.id, ganho);
                     return interaction.reply(`💼 Você trabalhou e recebeu **${ganhoWork} XP**${ganhoWork < ganho ? ' (limite diário atingido)' : ''}!`);
@@ -3630,7 +3668,7 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                 }
                 if (comando === 'inventario') { const inv=user.inventario.length?user.inventario.map(x=>`• ${x}`).join('\n'):'Seu inventário está vazio.'; return interaction.reply(`🎒 **Inventário de ${interaction.user.username}**\n\n${inv}`); }
                 if (comando === 'ricos') { const ranking=Object.entries(dados[interaction.guild.id]||{}).map(([id,u])=>({id,xp:u?.xpTotal||0})).sort((a,b)=>b.xp-a.xp).slice(0,10); return interaction.reply('🏆 **Mais ricos em XP**\n'+(ranking.map((r,i)=>`${i+1}. <@${r.id}> — **${r.xp.toLocaleString('pt-BR')} XP**`).join('\n')||'Ninguém ainda.')); }
-                if (comando === 'metas') { const metas=[1000,5000,15000,30000,70000,100000,150000]; const saldo=obterSaldoXP(interaction.guild.id,interaction.user.id); const linhas=metas.map(m=>`${saldo>=m?'✅':'⬜'} ${m.toLocaleString('pt-BR')} XP${saldo>=m?' — concluída':''}`).join('\n'); return interaction.reply(`🎯 **Metas do servidor**\n\n${linhas}\n\n💡 Continue participando, conversando e usando os sistemas para ganhar XP.`); }
+                if (comando === 'metas') { const metas=[30000,40000,60000,100000,200000,300000]; const saldo=obterSaldoXP(interaction.guild.id,interaction.user.id); const linhas=metas.map(m=>`${saldo>=m?'✅':'⬜'} ${m.toLocaleString('pt-BR')} XP${saldo>=m?' — concluída':''}`).join('\n'); return interaction.reply(`🎯 **Metas do servidor**\n\n${linhas}\n\n💡 Continue participando, conversando e usando os sistemas para ganhar XP.`); }
             }
 
             // ==================================================
@@ -5311,12 +5349,10 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                     .sort(
                         (a, b) =>
                             (
-                                b[1].nivel * 100 +
-                                b[1].xp
+                                (b[1].xpTotal || 0)
                             ) -
                             (
-                                a[1].nivel * 100 +
-                                a[1].xp
+                                (a[1].xpTotal || 0)
                             )
                     )
                     .slice(
@@ -5406,7 +5442,9 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                     '`/castigo-status` — Mostra quanto tempo falta do seu castigo.\n' +
                     '`/cl [quantidade]` — Apaga suas mensagens anteriores somente neste canal; funciona em qualquer canal de texto.\n' +
                     '`/addxp` — Adiciona XP a um usuário (equipe).\n' +
-                    '`/removexp` — Remove XP de um usuário (equipe).\n\n' +
+                    '`/removexp` — Remove XP de um usuário (equipe).\n' +
+                     '`/addemoji` — Adiciona emojis personalizados (Administrador).\n' +
+                     '`/addfigurinha` — Ativa a importação de figurinhas (Administrador).\n\n' +
                     '**💰 ECONOMIA**\n' +
                     '`/saldo` `/daily` `/work` `/transferir` `/loja` `/comprar` `/inventario` `/ricos` `/metas`\n\n' +
                     '**🎮 DIVERSÃO**\n' +
@@ -6209,7 +6247,7 @@ client.on(
             adicionarXPDiario(
                 guildId,
                 message.author.id,
-                1
+                XP_POR_MENSAGEM
             );
 
             salvarDados();
