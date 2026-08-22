@@ -2099,6 +2099,150 @@ async function entregarVIP(guild, userId, chave) {
 }
 
 // ======================================================
+// SISTEMA /ADD — EMOJIS E FIGURINHAS
+// ======================================================
+
+const addFigurinhaAtivo = new Map();
+
+function extrairEmojisPersonalizados(texto) {
+    const encontrados = [];
+    const regex = /<(a?):([A-Za-z0-9_]{2,32}):(\d{17,20})>/g;
+    let match;
+
+    while ((match = regex.exec(String(texto || ''))) !== null) {
+        encontrados.push({
+            nome: match[2],
+            id: match[3],
+            animado: match[1] === 'a'
+        });
+    }
+
+    return encontrados;
+}
+
+function limparNomeEmoji(nome, fallback = 'emoji') {
+    const limpo = String(nome || '')
+        .replace(/[^a-zA-Z0-9_]/g, '_')
+        .slice(0, 32);
+
+    return limpo.length >= 2 ? limpo : fallback;
+}
+
+function limparNomeFigurinha(nome, fallback = 'figurinha') {
+    const limpo = String(nome || '')
+        .replace(/[^a-zA-Z0-9_ -]/g, '')
+        .trim()
+        .slice(0, 30);
+
+    return limpo.length >= 2 ? limpo : fallback;
+}
+
+async function verificarPermissaoAdicionarExpressoes(interaction) {
+    if (!interaction.member?.permissions?.has(PermissionsBitField.Flags.Administrator)) {
+        return {
+            permitido: false,
+            mensagem: '❌ Apenas pessoas com a permissão **Administrador** podem usar este comando.'
+        };
+    }
+
+    const botMember = interaction.guild.members.me;
+
+    if (!botMember) {
+        return {
+            permitido: false,
+            mensagem: '❌ Não consegui localizar o bot no servidor.'
+        };
+    }
+
+    if (!botMember.permissions.has(PermissionsBitField.Flags.ManageGuildExpressions)) {
+        return {
+            permitido: false,
+            mensagem: '❌ Eu preciso da permissão **Gerenciar Expressões** para adicionar emojis e figurinhas.'
+        };
+    }
+
+    return { permitido: true };
+}
+
+async function adicionarEmojisDoTexto(guild, texto) {
+    const emojis = extrairEmojisPersonalizados(texto);
+
+    if (!emojis.length) {
+        return {
+            adicionados: [],
+            erros: [],
+            ignorados: ['Nenhum emoji personalizado foi encontrado. Use, por exemplo, <:nome:ID> ou <a:nome:ID>.']
+        };
+    }
+
+    const adicionados = [];
+    const erros = [];
+    const ignorados = [];
+
+    for (const emoji of emojis) {
+        const existente = guild.emojis.cache.find(e =>
+            e.name === emoji.nome
+        );
+
+        if (existente) {
+            ignorados.push(`${emoji.nome} (já existe no servidor)`);
+            continue;
+        }
+
+        try {
+            const extensao = emoji.animado ? 'gif' : 'png';
+            const url = `https://cdn.discordapp.com/emojis/${emoji.id}.${extensao}`;
+
+            const criado = await guild.emojis.create({
+                attachment: url,
+                name: limparNomeEmoji(emoji.nome),
+                reason: 'Emoji adicionado pelo comando /add emoji'
+            });
+
+            adicionados.push(criado.toString());
+        } catch (erro) {
+            erros.push(`${emoji.nome}: ${erro.message}`);
+        }
+    }
+
+    return { adicionados, erros, ignorados };
+}
+
+async function adicionarFigurinha(guild, sticker) {
+    const nome = limparNomeFigurinha(sticker.name, `figurinha_${Date.now()}`);
+
+    const existente = guild.stickers.cache.find(s => s.name === nome);
+    if (existente) {
+        return {
+            criado: null,
+            ignorado: true,
+            mensagem: `${nome} (já existe no servidor)`
+        };
+    }
+
+    try {
+        const criado = await guild.stickers.create({
+            file: sticker.url,
+            name: nome,
+            tags: String(sticker.name || 'sticker').slice(0, 200),
+            reason: 'Figurinha adicionada pelo comando /add figurinha'
+        });
+
+        return {
+            criado,
+            ignorado: false,
+            mensagem: null
+        };
+    } catch (erro) {
+        return {
+            criado: null,
+            ignorado: false,
+            mensagem: `${nome}: ${erro.message}`
+        };
+    }
+}
+
+// ======================================================
 // COMANDOS
 // ======================================================
 
@@ -2682,6 +2826,32 @@ const comandos = [
 
     new SlashCommandBuilder().setName('vip-painel').setDescription('Envia/atualiza o painel de compras VIP no canal VIP.'),
 
+    // ==================================================
+    // /ADD — EMOJIS E FIGURINHAS
+    // ==================================================
+
+    new SlashCommandBuilder()
+        .setName('add')
+        .setDescription('Adiciona emojis e figurinhas ao servidor.')
+        .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+        .addSubcommand(sub =>
+            sub
+                .setName('emoji')
+                .setDescription('Adiciona emojis personalizados ao servidor.')
+                .addStringOption(o =>
+                    o
+                        .setName('emojis')
+                        .setDescription('Emojis personalizados, por exemplo: <:nome:ID> <a:nome:ID>')
+                        .setRequired(true)
+                        .setMaxLength(6000)
+                )
+        )
+        .addSubcommand(sub =>
+            sub
+                .setName('figurinha')
+                .setDescription('Ativa o modo para adicionar as próximas figurinhas enviadas.')
+        ),
+
     new SlashCommandBuilder()
         .setName('stop')
         .setDescription('Trava o chat atual e impede mensagens de membros sem Administrador.')
@@ -3229,6 +3399,72 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
             if (!interaction.isChatInputCommand()) return;
 
             const comando = interaction.commandName;
+
+            // ==================================================
+            // /ADD — EMOJI / FIGURINHA
+            // Apenas Administradores podem executar.
+            // ==================================================
+            if (comando === 'add') {
+                const permissao = await verificarPermissaoAdicionarExpressoes(interaction);
+
+                if (!permissao.permitido) {
+                    return interaction.reply({
+                        content: permissao.mensagem,
+                        ephemeral: true
+                    });
+                }
+
+                const subcomando = interaction.options.getSubcommand();
+
+                if (subcomando === 'emoji') {
+                    const textoEmojis = interaction.options.getString('emojis', true);
+                    const resultado = await adicionarEmojisDoTexto(
+                        interaction.guild,
+                        textoEmojis
+                    );
+
+                    const partes = [];
+
+                    if (resultado.adicionados.length) {
+                        partes.push(`✅ **${resultado.adicionados.length} emoji(s) adicionado(s):** ${resultado.adicionados.join(' ')}`);
+                    }
+
+                    if (resultado.ignorados.length) {
+                        partes.push(`⚠️ **Ignorados:** ${resultado.ignorados.join(', ')}`);
+                    }
+
+                    if (resultado.erros.length) {
+                        partes.push(`❌ **Erros:**\n${resultado.erros.join('\n')}`);
+                    }
+
+                    return interaction.reply({
+                        content: partes.join('\n\n') || '❌ Nenhum emoji foi adicionado.',
+                        ephemeral: false
+                    });
+                }
+
+                if (subcomando === 'figurinha') {
+                    const chave = `${interaction.guild.id}:${interaction.user.id}:${interaction.channelId}`;
+
+                    addFigurinhaAtivo.set(chave, {
+                        guildId: interaction.guild.id,
+                        userId: interaction.user.id,
+                        channelId: interaction.channelId,
+                        expiraEm: Date.now() + (2 * 60 * 1000),
+                        adicionadas: 0
+                    });
+
+                    return interaction.reply({
+                        content: '🧩 **Modo de adicionar figurinhas ativado!**\n\nAgora envie as figurinhas que deseja adicionar neste canal. Cada figurinha enviada será adicionada automaticamente ao servidor.\n\n⏱️ O modo ficará ativo por **2 minutos** ou até você usar `/add figurinha` novamente.',
+                        ephemeral: true
+                    });
+                }
+
+                return interaction.reply({
+                    content: '❌ Subcomando inválido.',
+                    ephemeral: true
+                });
+            }
 
             // ==================================================
             // ==================================================
@@ -5874,6 +6110,86 @@ client.on(
                 !message.guild
             ) {
                 return;
+            }
+
+            // ==================================================
+            // /ADD FIGURINHA — RECEBER AS FIGURINHAS ENVIADAS
+            // Somente o administrador que ativou o modo pode enviar.
+            // ==================================================
+            const chaveAddFigurinha =
+                `${message.guild.id}:${message.author.id}:${message.channelId}`;
+
+            const modoFigurinha =
+                addFigurinhaAtivo.get(chaveAddFigurinha);
+
+            if (modoFigurinha) {
+                if (Date.now() >= modoFigurinha.expiraEm) {
+                    addFigurinhaAtivo.delete(chaveAddFigurinha);
+                } else if (message.stickers?.size > 0) {
+                    const botMember = message.guild.members.me;
+
+                    if (
+                        !botMember ||
+                        !botMember.permissions.has(
+                            PermissionsBitField.Flags.ManageGuildExpressions
+                        )
+                    ) {
+                        await message.channel.send(
+                            '❌ Eu preciso da permissão **Gerenciar Expressões** para adicionar figurinhas.'
+                        ).catch(() => null);
+
+                        addFigurinhaAtivo.delete(chaveAddFigurinha);
+                        return;
+                    }
+
+                    const adicionadas = [];
+                    const ignoradas = [];
+                    const erros = [];
+
+                    for (const sticker of message.stickers.values()) {
+                        const resultado =
+                            await adicionarFigurinha(
+                                message.guild,
+                                sticker
+                            );
+
+                        if (resultado.criado) {
+                            adicionadas.push(resultado.criado.name);
+                        } else if (resultado.ignorado) {
+                            ignoradas.push(resultado.mensagem);
+                        } else if (resultado.mensagem) {
+                            erros.push(resultado.mensagem);
+                        }
+                    }
+
+                    const resposta = [];
+
+                    if (adicionadas.length) {
+                        resposta.push(
+                            `✅ **Figurinhas adicionadas:** ${adicionadas.map(nome => `**${nome}**`).join(', ')}`
+                        );
+                        modoFigurinha.adicionadas += adicionadas.length;
+                    }
+
+                    if (ignoradas.length) {
+                        resposta.push(
+                            `⚠️ **Ignoradas:** ${ignoradas.join(', ')}`
+                        );
+                    }
+
+                    if (erros.length) {
+                        resposta.push(
+                            `❌ **Erros:**\n${erros.join('\n')}`
+                        );
+                    }
+
+                    await message.reply(
+                        resposta.join('\n\n') ||
+                        '❌ Não consegui adicionar essa figurinha.'
+                    ).catch(() => null);
+
+                    return;
+                }
             }
 
             const guildId =
