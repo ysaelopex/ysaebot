@@ -2196,7 +2196,7 @@ async function adicionarEmojisDoTexto(guild, texto) {
             const criado = await guild.emojis.create({
                 attachment: url,
                 name: limparNomeEmoji(emoji.nome),
-                reason: 'Emoji adicionado pelo comando /add emoji'
+                reason: 'Emoji adicionado pelo comando /addemoji'
             });
 
             adicionados.push(criado.toString());
@@ -2225,7 +2225,7 @@ async function adicionarFigurinha(guild, sticker) {
             file: sticker.url,
             name: nome,
             tags: String(sticker.name || 'sticker').slice(0, 200),
-            reason: 'Figurinha adicionada pelo comando /add figurinha'
+            reason: 'Figurinha adicionada pelo comando /addfigurinha'
         });
 
         return {
@@ -2827,30 +2827,25 @@ const comandos = [
     new SlashCommandBuilder().setName('vip-painel').setDescription('Envia/atualiza o painel de compras VIP no canal VIP.'),
 
     // ==================================================
-    // /ADD — EMOJIS E FIGURINHAS
+    // /ADDEMOJI E /ADDFIGURINHA
     // ==================================================
 
     new SlashCommandBuilder()
-        .setName('add')
-        .setDescription('Adiciona emojis e figurinhas ao servidor.')
+        .setName('addemoji')
+        .setDescription('Adiciona emojis personalizados ao servidor.')
         .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
-        .addSubcommand(sub =>
-            sub
-                .setName('emoji')
-                .setDescription('Adiciona emojis personalizados ao servidor.')
-                .addStringOption(o =>
-                    o
-                        .setName('emojis')
-                        .setDescription('Emojis personalizados, por exemplo: <:nome:ID> <a:nome:ID>')
-                        .setRequired(true)
-                        .setMaxLength(6000)
-                )
-        )
-        .addSubcommand(sub =>
-            sub
-                .setName('figurinha')
-                .setDescription('Ativa o modo para adicionar as próximas figurinhas enviadas.')
+        .addStringOption(o =>
+            o
+                .setName('emojis')
+                .setDescription('Emojis personalizados, por exemplo: <:nome:ID> <a:nome:ID>')
+                .setRequired(true)
+                .setMaxLength(6000)
         ),
+
+    new SlashCommandBuilder()
+        .setName('addfigurinha')
+        .setDescription('Ativa o modo para adicionar as próximas figurinhas enviadas.')
+        .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator),
 
     new SlashCommandBuilder()
         .setName('stop')
@@ -3401,10 +3396,10 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
             const comando = interaction.commandName;
 
             // ==================================================
-            // /ADD — EMOJI / FIGURINHA
+            // /ADDEMOJI E /ADDFIGURINHA
             // Apenas Administradores podem executar.
             // ==================================================
-            if (comando === 'add') {
+            if (comando === 'addemoji' || comando === 'addfigurinha') {
                 const permissao = await verificarPermissaoAdicionarExpressoes(interaction);
 
                 if (!permissao.permitido) {
@@ -3414,9 +3409,7 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                     });
                 }
 
-                const subcomando = interaction.options.getSubcommand();
-
-                if (subcomando === 'emoji') {
+                if (comando === 'addemoji') {
                     const textoEmojis = interaction.options.getString('emojis', true);
                     const resultado = await adicionarEmojisDoTexto(
                         interaction.guild,
@@ -3443,25 +3436,18 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                     });
                 }
 
-                if (subcomando === 'figurinha') {
-                    const chave = `${interaction.guild.id}:${interaction.user.id}:${interaction.channelId}`;
+                const chave = `${interaction.guild.id}:${interaction.user.id}:${interaction.channelId}`;
 
-                    addFigurinhaAtivo.set(chave, {
-                        guildId: interaction.guild.id,
-                        userId: interaction.user.id,
-                        channelId: interaction.channelId,
-                        expiraEm: Date.now() + (2 * 60 * 1000),
-                        adicionadas: 0
-                    });
-
-                    return interaction.reply({
-                        content: '🧩 **Modo de adicionar figurinhas ativado!**\n\nAgora envie as figurinhas que deseja adicionar neste canal. Cada figurinha enviada será adicionada automaticamente ao servidor.\n\n⏱️ O modo ficará ativo por **2 minutos** ou até você usar `/add figurinha` novamente.',
-                        ephemeral: true
-                    });
-                }
+                addFigurinhaAtivo.set(chave, {
+                    guildId: interaction.guild.id,
+                    userId: interaction.user.id,
+                    channelId: interaction.channelId,
+                    expiraEm: Date.now() + (2 * 60 * 1000),
+                    adicionadas: 0
+                });
 
                 return interaction.reply({
-                    content: '❌ Subcomando inválido.',
+                    content: '🧩 **Modo de adicionar figurinhas ativado!**\n\nAgora envie as figurinhas que deseja adicionar neste canal. Cada figurinha enviada será adicionada automaticamente ao servidor.\n\n⏱️ O modo ficará ativo por **2 minutos** ou até você usar `/addfigurinha` novamente.',
                     ephemeral: true
                 });
             }
