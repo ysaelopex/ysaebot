@@ -5398,7 +5398,7 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                 comando === 'ajuda'
             ) {
 
-                return interaction.reply(
+                const textoAjuda =
                     '📚 **Comandos disponíveis:**\n\n' +
 
                     '`/info` — Mostra os comandos que você pode usar.\n' +
@@ -5443,18 +5443,35 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                     '`/cl [quantidade]` — Apaga suas mensagens anteriores somente neste canal; funciona em qualquer canal de texto.\n' +
                     '`/addxp` — Adiciona XP a um usuário (equipe).\n' +
                     '`/removexp` — Remove XP de um usuário (equipe).\n' +
-                     '`/addemoji` — Adiciona emojis personalizados (Administrador).\n' +
-                     '`/addfigurinha` — Ativa a importação de figurinhas (Administrador).\n\n' +
+                    '`/addemoji` — Adiciona emojis personalizados (Administrador).\n' +
+                    '`/addfigurinha` — Ativa a importação de figurinhas (Administrador).\n\n' +
+
                     '**💰 ECONOMIA**\n' +
                     '`/saldo` `/daily` `/work` `/transferir` `/loja` `/comprar` `/inventario` `/ricos` `/metas`\n\n' +
+
                     '**🎮 DIVERSÃO**\n' +
                     '`/8ball` `/caraoucoroa` `/dados` `/adivinha` `/rankingdiversao`\n\n' +
+
                     '**🛡️ Moderação:**\n' +
                     '`/castigo` — Aplica castigo.\n' +
                     '`/tirarcastigo` — Remove castigo.\n' +
-                    'Os comandos de moderação devem ser usados no canal de moderação.'
-                );
+                    'Os comandos de moderação devem ser usados no canal de moderação.';
 
+                // O Discord limita mensagens normais a 2.000 caracteres.
+                // Dividimos a ajuda em partes menores para evitar erro 50035.
+                const partes = textoAjuda.match(/[\s\S]{1,1900}/g) || [''];
+
+                await interaction.reply({
+                    content: partes.shift()
+                });
+
+                for (const parte of partes) {
+                    await interaction.followUp({
+                        content: parte
+                    });
+                }
+
+                return;
             }
 
             // ==================================================
