@@ -29,6 +29,15 @@ const client = new Client({
     ]
 });
 
+// Evita que um erro emitido pelo cliente do Discord derrube o processo.
+client.on('error', (error) => {
+    console.error('❌ Erro interno do cliente Discord:', error);
+});
+
+process.on('unhandledRejection', (error) => {
+    console.error('❌ Promise rejeitada sem tratamento:', error);
+});
+
 // ======================================================
 // CONFIGURAÇÕES
 // ======================================================
@@ -5458,20 +5467,16 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                     'Os comandos de moderação devem ser usados no canal de moderação.';
 
                 // O Discord limita mensagens normais a 2.000 caracteres.
-                // Dividimos a ajuda em partes menores para evitar erro 50035.
-                const partes = textoAjuda.match(/[\s\S]{1,1900}/g) || [''];
+                // A ajuda pode ser maior que isso, então enviamos como embed.
+                // A descrição de um embed aceita até 4.096 caracteres.
+                const ajudaEmbed = new EmbedBuilder()
+                    .setTitle('📚 Ajuda — Comandos disponíveis')
+                    .setDescription(textoAjuda)
+                    .setTimestamp();
 
-                await interaction.reply({
-                    content: partes.shift()
+                return interaction.reply({
+                    embeds: [ajudaEmbed]
                 });
-
-                for (const parte of partes) {
-                    await interaction.followUp({
-                        content: parte
-                    });
-                }
-
-                return;
             }
 
             // ==================================================
