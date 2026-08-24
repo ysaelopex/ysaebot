@@ -6703,4 +6703,4 @@ http.createServer((req, res) => {
     res.end('Bot online!');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Servidor web rodando na porta ${PORT}`);
-});
+	});
