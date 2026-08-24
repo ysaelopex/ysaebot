@@ -1957,32 +1957,52 @@ async function protegerMembro(
 // CASAMENTO
 // ======================================================
 
+const pedidosCasamento = new Map();
+const DURACAO_PEDIDO_CASAMENTO = 2 * 60 * 1000;
+
+function criarPedidoCasamento(guildId, autorId, alvoId) {
+    const chave = `${guildId}:${autorId}:${alvoId}`;
+    const pedido = {
+        guildId,
+        autorId,
+        alvoId,
+        expiraEm: Date.now() + DURACAO_PEDIDO_CASAMENTO
+    };
+
+    pedidosCasamento.set(chave, pedido);
+
+    setTimeout(() => {
+        const atual = pedidosCasamento.get(chave);
+        if (atual === pedido) pedidosCasamento.delete(chave);
+    }, DURACAO_PEDIDO_CASAMENTO);
+
+    return chave;
+}
+
+function obterPedidoCasamento(chave) {
+    const pedido = pedidosCasamento.get(chave);
+    if (!pedido) return null;
+
+    if (Date.now() >= pedido.expiraEm) {
+        pedidosCasamento.delete(chave);
+        return null;
+    }
+
+    return pedido;
+}
+
 function casar(
     guildId,
     userId,
     parceiroId
 ) {
+    const usuario = obterUsuario(guildId, userId);
+    const parceiro = obterUsuario(guildId, parceiroId);
 
-    const usuario =
-        obterUsuario(
-            guildId,
-            userId
-        );
-
-    const parceiro =
-        obterUsuario(
-            guildId,
-            parceiroId
-        );
-
-    usuario.parceiro =
-        parceiroId;
-
-    parceiro.parceiro =
-        userId;
+    usuario.parceiro = parceiroId;
+    parceiro.parceiro = userId;
 
     salvarDados();
-
 }
 
 // ======================================================
@@ -2065,52 +2085,147 @@ Clique em um botão para abrir um ticket privado. Dentro do ticket você escolhe
     }
 }
 
+const ticketsEmCriacao = new Set();
+
 async function criarTicketVIP(interaction, chave) {
     const vip = VIP_COMPRAS[chave];
-    if (!vip) return;
+    if (!vip) {
+        return interaction.reply({ content: '❌ VIP inválido.', ephemeral: true });
+    }
+
+    // Responde imediatamente ao Discord para evitar "This interaction failed"
+    // enquanto o canal do ticket está sendo criado.
+    await interaction.deferReply({ ephemeral: true });
+
     const guild = interaction.guild;
-    const existente = guild.channels.cache.find(c => c.topic === `vip-ticket:${interaction.user.id}`);
+    const lock = `${guild.id}:${interaction.user.id}`;
+
+    if (ticketsEmCriacao.has(lock)) {
+        return interaction.editReply({ content: '⏳ Seu ticket já está sendo criado. Aguarde um momento.' });
+    }
+
+    ticketsEmCriacao.add(lock);
+    const existente = guild.channels.cache.find(
+        c => c.type === ChannelType.GuildText && c.topic === `vip-ticket:${interaction.user.id}`
+    );
+
     if (existente) {
-        return interaction.reply({ content: `❌ Você já possui um ticket VIP aberto: ${existente}`, ephemeral: true });
+        ticketsEmCriacao.delete(lock);
+        return interaction.editReply({
+            content: `❌ Você já possui um ticket VIP aberto: ${existente}`
+        });
     }
 
     const categoria = await guild.channels.fetch(CATEGORIA_TICKETS).catch(() => null);
-    if (!categoria) return interaction.reply({ content: '❌ A categoria de tickets não foi encontrada.', ephemeral: true });
+    if (!categoria || categoria.type !== ChannelType.GuildCategory) {
+        ticketsEmCriacao.delete(lock);
+        return interaction.editReply({
+            content: '❌ A categoria de tickets não foi encontrada ou não é uma categoria válida.'
+        });
+    }
 
-    const nome = `vip-${chave}-${interaction.user.username.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 60)}`;
-    const canal = await guild.channels.create({
-        name: nome,
-        type: ChannelType.GuildText,
-        parent: categoria.id,
-        topic: `vip-ticket:${interaction.user.id}`,
-        permissionOverwrites: [
-            { id: guild.roles.everyone.id, deny: ['ViewChannel'] },
-            { id: interaction.user.id, allow: ['ViewChannel','SendMessages','ReadMessageHistory'] },
-            { id: CARGO_SUPORTE, allow: ['ViewChannel','SendMessages','ReadMessageHistory','ManageMessages'] },
-            { id: client.user.id, allow: ['ViewChannel','SendMessages','ReadMessageHistory','ManageChannels'] }
-        ]
-    });
+    const suporte = guild.roles.cache.get(CARGO_SUPORTE) ||
+        await guild.roles.fetch(CARGO_SUPORTE).catch(() => null);
 
-    const embed = new EmbedBuilder()
-        .setTitle(`🎫 Compra — ${vip.nome}`)
-        .setDescription(`Olá ${interaction.user}!
+    if (!suporte) {
+        ticketsEmCriacao.delete(lock);
+        return interaction.editReply({
+            content: '❌ O cargo de suporte configurado para os tickets não foi encontrado.'
+        });
+    }
 
-Você escolheu **${vip.nome}**.
+    const nome = `vip-${chave}-${interaction.user.username
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, '-')
+        .replace(/-+/g, '-')
+        .slice(0, 70)}`;
 
-💎 **Preço em XP:** ${vip.xp.toLocaleString('pt-BR')} XP
-💰 **Preço no Pix:** R$ ${vip.preco.toFixed(2).replace('.', ',')}
+    try {
+        const canal = await guild.channels.create({
+            name: nome,
+            type: ChannelType.GuildText,
+            parent: categoria.id,
+            topic: `vip-ticket:${interaction.user.id}`,
+            permissionOverwrites: [
+                {
+                    id: guild.roles.everyone.id,
+                    deny: [PermissionsBitField.Flags.ViewChannel]
+                },
+                {
+                    id: interaction.user.id,
+                    allow: [
+                        PermissionsBitField.Flags.ViewChannel,
+                        PermissionsBitField.Flags.SendMessages,
+                        PermissionsBitField.Flags.ReadMessageHistory
+                    ]
+                },
+                {
+                    id: suporte.id,
+                    allow: [
+                        PermissionsBitField.Flags.ViewChannel,
+                        PermissionsBitField.Flags.SendMessages,
+                        PermissionsBitField.Flags.ReadMessageHistory,
+                        PermissionsBitField.Flags.ManageMessages
+                    ]
+                },
+                {
+                    id: client.user.id,
+                    allow: [
+                        PermissionsBitField.Flags.ViewChannel,
+                        PermissionsBitField.Flags.SendMessages,
+                        PermissionsBitField.Flags.ReadMessageHistory,
+                        PermissionsBitField.Flags.ManageChannels
+                    ]
+                }
+            ]
+        });
 
-Escolha abaixo como deseja pagar.`)
-        .setTimestamp();
+        const embed = new EmbedBuilder()
+            .setTitle(`🎫 Compra — ${vip.nome}`)
+            .setDescription(
+                `Olá ${interaction.user}!\n\n` +
+                `Você escolheu **${vip.nome}**.\n\n` +
+                `💎 **Preço em XP:** ${vip.xp.toLocaleString('pt-BR')} XP\n` +
+                `💰 **Preço no Pix:** R$ ${vip.preco.toFixed(2).replace('.', ',')}\n\n` +
+                `Escolha abaixo como deseja pagar.`
+            )
+            .setTimestamp();
 
-    const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`vip_pagar_xp_${chave}`).setLabel('Pagar com XP').setEmoji('⭐').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId(`vip_pagar_pix_${chave}`).setLabel('Pagar com Pix').setEmoji('💳').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(`vip_cancelar_${chave}`).setLabel('Cancelar').setEmoji('🗑️').setStyle(ButtonStyle.Danger)
-    );
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`vip_pagar_xp_${chave}`)
+                .setLabel('Pagar com XP')
+                .setEmoji('⭐')
+                .setStyle(ButtonStyle.Success),
+            new ButtonBuilder()
+                .setCustomId(`vip_pagar_pix_${chave}`)
+                .setLabel('Pagar com Pix')
+                .setEmoji('💳')
+                .setStyle(ButtonStyle.Primary),
+            new ButtonBuilder()
+                .setCustomId(`vip_cancelar_${chave}`)
+                .setLabel('Cancelar')
+                .setEmoji('🗑️')
+                .setStyle(ButtonStyle.Danger)
+        );
 
-    await canal.send({ content: `${interaction.user} <@&${CARGO_SUPORTE}>`, embeds: [embed], components: [row] });
-    await interaction.reply({ content: `✅ Seu ticket foi criado: ${canal}`, ephemeral: true });
+        await canal.send({
+            content: `${interaction.user} <@&${suporte.id}>`,
+            embeds: [embed],
+            components: [row]
+        });
+
+        ticketsEmCriacao.delete(lock);
+        return interaction.editReply({
+            content: `✅ Seu ticket foi criado: ${canal}`
+        });
+    } catch (erro) {
+        console.error('❌ Erro ao criar ticket VIP:', erro);
+        ticketsEmCriacao.delete(lock);
+        return interaction.editReply({
+            content: `❌ Não consegui criar o ticket. Verifique se o bot tem **Gerenciar Canais** e permissão para criar canais na categoria.\n\nErro: ${erro.message}`
+        });
+    }
 }
 
 async function entregarVIP(guild, userId, chave) {
@@ -2123,168 +2238,6 @@ async function entregarVIP(guild, userId, chave) {
     await member.roles.add(role, `Compra ${vip.nome}`);
     iniciarContagemVip(guild.id, userId, chave);
     return role;
-}
-
-// ======================================================
-// SISTEMA /ADD — EMOJIS E FIGURINHAS
-// ======================================================
-
-const addFigurinhaAtivo = new Map();
-
-function extrairEmojisPersonalizados(texto) {
-    const encontrados = [];
-    const regex = /<(a?):([A-Za-z0-9_]{2,32}):(\d{17,20})>/g;
-    let match;
-
-    while ((match = regex.exec(String(texto || ''))) !== null) {
-        encontrados.push({
-            nome: match[2],
-            id: match[3],
-            animado: match[1] === 'a'
-        });
-    }
-
-    return encontrados;
-}
-
-function limparNomeEmoji(nome, fallback = 'emoji') {
-    const limpo = String(nome || '')
-        .replace(/[^a-zA-Z0-9_]/g, '_')
-        .slice(0, 32);
-
-    return limpo.length >= 2 ? limpo : fallback;
-}
-
-function limparNomeFigurinha(nome, fallback = 'figurinha') {
-    const limpo = String(nome || '')
-        .replace(/[^a-zA-Z0-9_ -]/g, '')
-        .trim()
-        .slice(0, 30);
-
-    return limpo.length >= 2 ? limpo : fallback;
-}
-
-async function verificarPermissaoAdicionarExpressoes(interaction) {
-    if (!interaction.member?.permissions?.has(PermissionsBitField.Flags.Administrator)) {
-        return {
-            permitido: false,
-            mensagem: '❌ Apenas pessoas com a permissão **Administrador** podem usar este comando.'
-        };
-    }
-
-    const botMember = interaction.guild.members.me;
-
-    if (!botMember) {
-        return {
-            permitido: false,
-            mensagem: '❌ Não consegui localizar o bot no servidor.'
-        };
-    }
-
-    if (!botMember.permissions.has(PermissionsBitField.Flags.ManageGuildExpressions)) {
-        return {
-            permitido: false,
-            mensagem: '❌ Eu preciso da permissão **Gerenciar Expressões** para adicionar emojis e figurinhas.'
-        };
-    }
-
-    return { permitido: true };
-}
-
-async function adicionarEmojisDoTexto(guild, texto) {
-    const encontrados = extrairEmojisPersonalizados(texto);
-    const urls = String(texto || '').match(/https?:\/\/[^\s<>]+\.(?:png|gif|webp)(?:\?[^\s<>]*)?/gi) || [];
-
-    if (!encontrados.length && !urls.length) {
-        return {
-            adicionados: [],
-            erros: [],
-            ignorados: ['Nenhum emoji personalizado foi encontrado. Use <:nome:ID> ou <a:nome:ID>. Emojis Unicode como 😀 não podem ser importados como emoji personalizado.']
-        };
-    }
-
-    const adicionados = [];
-    const erros = [];
-    const ignorados = [];
-    const processados = new Set();
-
-    for (const emoji of encontrados) {
-        const chave = `${emoji.nome}:${emoji.id}`;
-        if (processados.has(chave)) continue;
-        processados.add(chave);
-
-        if (guild.emojis.cache.some(e => e.name === emoji.nome)) {
-            ignorados.push(`${emoji.nome} (já existe no servidor)`);
-            continue;
-        }
-
-        try {
-            const extensao = emoji.animado ? 'gif' : 'png';
-            const url = `https://cdn.discordapp.com/emojis/${emoji.id}.${extensao}`;
-            const criado = await guild.emojis.create({
-                attachment: url,
-                name: limparNomeEmoji(emoji.nome),
-                reason: 'Emoji adicionado pelo comando /addemoji'
-            });
-            adicionados.push(criado.toString());
-        } catch (erro) {
-            erros.push(`${emoji.nome}: ${erro.message}`);
-        }
-    }
-
-    for (const [index, url] of urls.entries()) {
-        try {
-            const base = url.split('?')[0].split('/').pop()?.split('.')[0] || `emoji_${index + 1}`;
-            const nome = limparNomeEmoji(base, `emoji_${index + 1}`);
-            if (guild.emojis.cache.some(e => e.name === nome)) {
-                ignorados.push(`${nome} (já existe no servidor)`);
-                continue;
-            }
-            const criado = await guild.emojis.create({
-                attachment: url,
-                name: nome,
-                reason: 'Emoji adicionado pelo comando /addemoji'
-            });
-            adicionados.push(criado.toString());
-        } catch (erro) {
-            erros.push(`URL ${index + 1}: ${erro.message}`);
-        }
-    }
-
-    return { adicionados, erros, ignorados };
-}
-async function adicionarFigurinha(guild, sticker) {
-    const nome = limparNomeFigurinha(sticker.name, `figurinha_${Date.now()}`);
-
-    const existente = guild.stickers.cache.find(s => s.name === nome);
-    if (existente) {
-        return {
-            criado: null,
-            ignorado: true,
-            mensagem: `${nome} (já existe no servidor)`
-        };
-    }
-
-    try {
-        const criado = await guild.stickers.create({
-            file: sticker.url,
-            name: nome,
-            tags: String(sticker.name || 'sticker').slice(0, 200),
-            reason: 'Figurinha adicionada pelo comando /addfigurinha'
-        });
-
-        return {
-            criado,
-            ignorado: false,
-            mensagem: null
-        };
-    } catch (erro) {
-        return {
-            criado: null,
-            ignorado: false,
-            mensagem: `${nome}: ${erro.message}`
-        };
-    }
 }
 
 // ======================================================
@@ -2871,29 +2824,6 @@ const comandos = [
 
     new SlashCommandBuilder().setName('vip-painel').setDescription('Envia/atualiza o painel de compras VIP no canal VIP.'),
 
-    // ==================================================
-    // /ADDEMOJI E /ADDFIGURINHA
-    // ==================================================
-
-    new SlashCommandBuilder()
-        .setName('addemoji')
-        .setDescription('Adiciona emojis personalizados ao servidor.')
-        .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
-        .setDMPermission(false)
-        .addStringOption(o =>
-            o
-                .setName('emojis')
-                .setDescription('Emojis personalizados, por exemplo: <:nome:ID> <a:nome:ID>')
-                .setRequired(true)
-                .setMaxLength(6000)
-        ),
-
-    new SlashCommandBuilder()
-        .setName('addfigurinha')
-        .setDescription('Ativa o modo para adicionar as próximas figurinhas enviadas.')
-        .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
-        .setDMPermission(false),
-
     new SlashCommandBuilder()
         .setName('stop')
         .setDescription('Trava o chat atual e impede mensagens de membros sem Administrador.')
@@ -3381,6 +3311,71 @@ client.on(
             if (interaction.isButton()) {
                 const id = interaction.customId;
 
+                // ==================================================
+                // PEDIDOS DE CASAMENTO
+                // ==================================================
+                if (id.startsWith('casamento_aceitar_') || id.startsWith('casamento_recusar_')) {
+                    const prefixo = id.startsWith('casamento_aceitar_')
+                        ? 'casamento_aceitar_'
+                        : 'casamento_recusar_';
+                    const chave = id.replace(prefixo, '');
+                    const pedido = obterPedidoCasamento(chave);
+
+                    if (!pedido) {
+                        return interaction.reply({
+                            content: '❌ Este pedido de casamento expirou ou já foi respondido.',
+                            ephemeral: true
+                        });
+                    }
+
+                    if (interaction.user.id !== pedido.alvoId) {
+                        return interaction.reply({
+                            content: '❌ Apenas a pessoa que recebeu o pedido pode responder.',
+                            ephemeral: true
+                        });
+                    }
+
+                    if (prefixo === 'casamento_recusar_') {
+                        pedidosCasamento.delete(chave);
+                        await interaction.update({
+                            content: `💔 ${interaction.user} recusou o pedido de casamento de <@${pedido.autorId}>.`,
+                            components: []
+                        });
+                        return;
+                    }
+
+                    const autor = obterUsuario(interaction.guild.id, pedido.autorId);
+                    const parceiro = obterUsuario(interaction.guild.id, pedido.alvoId);
+
+                    if (autor.parceiro || parceiro.parceiro) {
+                        pedidosCasamento.delete(chave);
+                        return interaction.update({
+                            content: '❌ O casamento não pode ser concluído porque uma das pessoas já está em um relacionamento.',
+                            components: []
+                        });
+                    }
+
+                    casar(interaction.guild.id, pedido.autorId, pedido.alvoId);
+                    pedidosCasamento.delete(chave);
+
+                    adicionarXPDiario(interaction.guild.id, pedido.autorId, 10);
+                    adicionarXPDiario(interaction.guild.id, pedido.alvoId, 10);
+
+                    await enviarLog(
+                        interaction.guild,
+                        '💍 Casamento',
+                        `<@${pedido.autorId}> e <@${pedido.alvoId}> aceitaram o casamento.`
+                    );
+
+                    await interaction.update({
+                        content:
+                            `💍 <@${pedido.autorId}> e ${interaction.user} agora estão casados! ❤️\n\n` +
+                            `⭐ **+10 XP para cada um!**`,
+                        components: []
+                    });
+                    return;
+                }
+
                 if (id.startsWith('vip_comprar_')) {
                     return criarTicketVIP(interaction, id.replace('vip_comprar_', ''));
                 }
@@ -3389,17 +3384,38 @@ client.on(
                     const chave = id.replace('vip_pagar_xp_', '');
                     const vip = VIP_COMPRAS[chave];
                     if (!vip) return interaction.reply({ content: '❌ VIP inválido.', ephemeral: true });
-                    if (obterSaldoXP(interaction.guild.id, interaction.user.id) < vip.xp) return interaction.reply({ content: `❌ Você precisa de **${vip.xp.toLocaleString('pt-BR')} XP**. Seu saldo é **${obterSaldoXP(interaction.guild.id, interaction.user.id).toLocaleString('pt-BR')} XP**.`, ephemeral: true });
-                    if (!gastarXP(interaction.guild.id, interaction.user.id, vip.xp)) return interaction.reply({ content: '❌ Não foi possível descontar seu XP.', ephemeral: true });
+
+                    const saldo = obterSaldoXP(interaction.guild.id, interaction.user.id);
+                    if (saldo < vip.xp) {
+                        return interaction.reply({
+                            content: `❌ Você precisa de **${vip.xp.toLocaleString('pt-BR')} XP**. Seu saldo é **${saldo.toLocaleString('pt-BR')} XP**.`,
+                            ephemeral: true
+                        });
+                    }
+
+                    await interaction.deferReply();
+
+                    if (!gastarXP(interaction.guild.id, interaction.user.id, vip.xp)) {
+                        return interaction.editReply({ content: '❌ Não foi possível descontar seu XP.' });
+                    }
+
                     try {
                         const role = await entregarVIP(interaction.guild, interaction.user.id, chave);
-                        await interaction.reply({ content: `✅ Compra aprovada! Você recebeu ${role}. **${vip.xp.toLocaleString('pt-BR')} XP** foram descontados.`, ephemeral: false });
-                        await enviarLog(interaction.guild, '💎 VIP comprado com XP', `${interaction.user} comprou ${vip.nome} por ${vip.xp} XP.`);
+                        await interaction.editReply({
+                            content: `✅ Compra aprovada! Você recebeu ${role}. **${vip.xp.toLocaleString('pt-BR')} XP** foram descontados.`
+                        });
+                        await enviarLog(
+                            interaction.guild,
+                            '💎 VIP comprado com XP',
+                            `${interaction.user} comprou ${vip.nome} por ${vip.xp} XP.`
+                        );
                     } catch (e) {
                         adicionarXP(interaction.guild.id, interaction.user.id, vip.xp);
-                        return interaction.reply({ content: `❌ Não consegui entregar o VIP. Seu XP foi devolvido.
-${e.message}`, ephemeral: true });
+                        return interaction.editReply({
+                            content: `❌ Não consegui entregar o VIP. Seu XP foi devolvido.\n${e.message}`
+                        });
                     }
+
                     setTimeout(() => interaction.channel.delete('Ticket VIP concluído').catch(() => null), 5000);
                     return;
                 }
@@ -3416,17 +3432,46 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                 }
 
                 if (id.startsWith('vip_aprovar_pix_')) {
-                    if (!interaction.member.roles.cache.has(CARGO_SUPORTE) && !interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: '❌ Apenas a equipe pode aprovar pagamentos.', ephemeral: true });
+                    if (
+                        !interaction.member.roles.cache.has(CARGO_SUPORTE) &&
+                        !interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)
+                    ) {
+                        return interaction.reply({
+                            content: '❌ Apenas a equipe pode aprovar pagamentos.',
+                            ephemeral: true
+                        });
+                    }
+
                     const chave = id.replace('vip_aprovar_pix_', '');
                     const vip = VIP_COMPRAS[chave];
+                    if (!vip) return interaction.reply({ content: '❌ VIP inválido.', ephemeral: true });
+
                     const ticketUserId = interaction.channel?.topic?.replace('vip-ticket:', '');
-                    if (!ticketUserId) return interaction.reply({ content: '❌ Não consegui identificar o comprador.', ephemeral: true });
+                    if (!ticketUserId) {
+                        return interaction.reply({
+                            content: '❌ Não consegui identificar o comprador.',
+                            ephemeral: true
+                        });
+                    }
+
+                    await interaction.deferReply();
+
                     try {
                         const role = await entregarVIP(interaction.guild, ticketUserId, chave);
-                        await interaction.reply({ content: `✅ Pagamento aprovado. ${role} entregue a <@${ticketUserId}>.` });
-                        await enviarLog(interaction.guild, '💳 VIP comprado via Pix', `${interaction.user} aprovou ${vip.nome} para <@${ticketUserId}>.`);
+                        await interaction.editReply({
+                            content: `✅ Pagamento aprovado. ${role} entregue a <@${ticketUserId}>.`
+                        });
+                        await enviarLog(
+                            interaction.guild,
+                            '💳 VIP comprado via Pix',
+                            `${interaction.user} aprovou ${vip.nome} para <@${ticketUserId}>.`
+                        );
                         setTimeout(() => interaction.channel.delete('Ticket VIP concluído').catch(() => null), 5000);
-                    } catch (e) { return interaction.reply({ content: `❌ Erro: ${e.message}`, ephemeral: true }); }
+                    } catch (e) {
+                        return interaction.editReply({
+                            content: `❌ Erro: ${e.message}`
+                        });
+                    }
                     return;
                 }
 
@@ -3441,63 +3486,6 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
             if (!interaction.isChatInputCommand()) return;
 
             const comando = interaction.commandName;
-
-            // ==================================================
-            // /ADDEMOJI E /ADDFIGURINHA
-            // Apenas Administradores podem executar.
-            // ==================================================
-            if (comando === 'addemoji' || comando === 'addfigurinha') {
-                const permissao = await verificarPermissaoAdicionarExpressoes(interaction);
-
-                if (!permissao.permitido) {
-                    return interaction.reply({
-                        content: permissao.mensagem,
-                        ephemeral: true
-                    });
-                }
-
-                if (comando === 'addemoji') {
-                    const textoEmojis = interaction.options.getString('emojis', true);
-                    const resultado = await adicionarEmojisDoTexto(
-                        interaction.guild,
-                        textoEmojis
-                    );
-
-                    const partes = [];
-
-                    if (resultado.adicionados.length) {
-                        partes.push(`✅ **${resultado.adicionados.length} emoji(s) adicionado(s):** ${resultado.adicionados.join(' ')}`);
-                    }
-
-                    if (resultado.ignorados.length) {
-                        partes.push(`⚠️ **Ignorados:** ${resultado.ignorados.join(', ')}`);
-                    }
-
-                    if (resultado.erros.length) {
-                        partes.push(`❌ **Erros:**\n${resultado.erros.join('\n')}`);
-                    }
-
-                    return interaction.reply({
-                        content: partes.join('\n\n') || '❌ Nenhum emoji foi adicionado.',
-                        ephemeral: false
-                    });
-                }
-
-                const chave = `${interaction.guild.id}:${interaction.user.id}:${interaction.channelId}`;
-
-                addFigurinhaAtivo.set(chave, {
-                    guildId: interaction.guild.id,
-                    userId: interaction.user.id,
-                    channelId: interaction.channelId,
-                    expiraEm: Date.now() + (2 * 60 * 1000),
-                    adicionadas: 0
-                });
-
-                return interaction.reply({
-                    content: '🧩 **Modo de adicionar figurinhas ativado!**\n\nAgora envie as figurinhas que deseja adicionar neste canal. Cada figurinha enviada será adicionada automaticamente ao servidor.\n\n⏱️ O modo ficará ativo por **2 minutos** ou até você usar `/addfigurinha` novamente.',
-                    ephemeral: true
-                });
-            }
 
             // ==================================================
             // ==================================================
@@ -4752,7 +4740,7 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
 
                 texto +=
                     '**❤️ SOCIAL**\n' +
-                    '`/casar` — Casa com alguém.\n' +
+                    '`/casar` — Envia um pedido de casamento; a pessoa precisa aceitar.\n' +
                     '`/divorcio` — Termina seu relacionamento.\n' +
                     '`/beijo` — Dá um beijo.\n' +
                     '`/abraco` — Dá um abraço.\n' +
@@ -4875,99 +4863,79 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
             // CASAR
             // ==================================================
 
-            if (
-                comando === 'casar'
-            ) {
+            if (comando === 'casar') {
+                const alvo = interaction.options.getUser('usuario');
 
-                const alvo =
-                    interaction.options.getUser(
-                        'usuario'
-                    );
-
-                if (
-                    alvo.id ===
-                    interaction.user.id
-                ) {
-
+                if (alvo.id === interaction.user.id) {
                     return interaction.reply({
-                        content:
-                            '❌ Você não pode se casar consigo mesmo.',
+                        content: '❌ Você não pode se casar consigo mesmo.',
                         ephemeral: true
                     });
-
                 }
 
                 if (alvo.bot) {
-
                     return interaction.reply({
-                        content:
-                            '❌ Você não pode se casar com um bot.',
+                        content: '❌ Você não pode se casar com um bot.',
                         ephemeral: true
                     });
-
                 }
 
-                const autor =
-                    obterUsuario(
-                        interaction.guild.id,
-                        interaction.user.id
-                    );
-
-                const parceiro =
-                    obterUsuario(
-                        interaction.guild.id,
-                        alvo.id
-                    );
+                const autor = obterUsuario(interaction.guild.id, interaction.user.id);
+                const parceiro = obterUsuario(interaction.guild.id, alvo.id);
 
                 if (autor.parceiro) {
-
                     return interaction.reply({
-                        content:
-                            '❌ Você já está em um relacionamento.',
+                        content: '❌ Você já está em um relacionamento.',
                         ephemeral: true
                     });
-
                 }
 
                 if (parceiro.parceiro) {
-
                     return interaction.reply({
-                        content:
-                            '❌ Essa pessoa já está em um relacionamento.',
+                        content: '❌ Essa pessoa já está em um relacionamento.',
                         ephemeral: true
                     });
-
                 }
 
-                casar(
+                // Impede vários pedidos simultâneos para a mesma pessoa.
+                for (const pedido of pedidosCasamento.values()) {
+                    if (
+                        pedido.guildId === interaction.guild.id &&
+                        pedido.alvoId === alvo.id &&
+                        Date.now() < pedido.expiraEm
+                    ) {
+                        return interaction.reply({
+                            content: '❌ Essa pessoa já possui um pedido de casamento pendente.',
+                            ephemeral: true
+                        });
+                    }
+                }
+
+                const chavePedido = criarPedidoCasamento(
                     interaction.guild.id,
                     interaction.user.id,
                     alvo.id
                 );
 
-                const ganhoCasamentoAutor = adicionarXPDiario(
-                    interaction.guild.id,
-                    interaction.user.id,
-                    10
+                const row = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(`casamento_aceitar_${chavePedido}`)
+                        .setLabel('Aceitar')
+                        .setEmoji('💍')
+                        .setStyle(ButtonStyle.Success),
+                    new ButtonBuilder()
+                        .setCustomId(`casamento_recusar_${chavePedido}`)
+                        .setLabel('Recusar')
+                        .setEmoji('❌')
+                        .setStyle(ButtonStyle.Danger)
                 );
 
-                const ganhoCasamentoAlvo = adicionarXPDiario(
-                    interaction.guild.id,
-                    alvo.id,
-                    10
-                );
-
-                await enviarLog(
-                    interaction.guild,
-                    '💍 Casamento',
-                    `${interaction.user} se casou com ${alvo}.`
-                );
-
-                return interaction.reply(
-                    `💍 ${interaction.user} e ${alvo} agora estão casados! ❤️\n\n` +
-                    `⭐ **+10 XP para cada um!**`
-                );
-
+                return interaction.reply({
+                    content:
+                        `💍 ${alvo}, **${interaction.user.username}** está te pedindo em casamento! ❤️\n\n` +
+                        `Somente ${alvo} pode aceitar ou recusar este pedido. O pedido expira em **2 minutos**.`,
+                    components: [row]
+                });
             }
 
             // ==================================================
@@ -5415,7 +5383,7 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                     '`/xp` — Mostra seu XP.\n' +
                     '`/viptime` — Mostra há quantos dias seu VIP está ativo e quando expira.\n' +
                     '`/ranking` — Mostra o ranking.\n' +
-                    '`/casar` — Casa com alguém.\n' +
+                    '`/casar` — Envia um pedido de casamento; a pessoa precisa aceitar.\n' +
                     '`/divorcio` — Termina seu relacionamento.\n' +
                     '`/beijo` — Dá um beijo.\n' +
                     '`/abraco` — Dá um abraço.\n' +
@@ -5452,8 +5420,6 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                     '`/cl [quantidade]` — Apaga suas mensagens anteriores somente neste canal; funciona em qualquer canal de texto.\n' +
                     '`/addxp` — Adiciona XP a um usuário (equipe).\n' +
                     '`/removexp` — Remove XP de um usuário (equipe).\n' +
-                    '`/addemoji` — Adiciona emojis personalizados (Administrador).\n' +
-                    '`/addfigurinha` — Ativa a importação de figurinhas (Administrador).\n\n' +
 
                     '**💰 ECONOMIA**\n' +
                     '`/saldo` `/daily` `/work` `/transferir` `/loja` `/comprar` `/inventario` `/ricos` `/metas`\n\n' +
@@ -6156,86 +6122,6 @@ client.on(
                 !message.guild
             ) {
                 return;
-            }
-
-            // ==================================================
-            // /ADD FIGURINHA — RECEBER AS FIGURINHAS ENVIADAS
-            // Somente o administrador que ativou o modo pode enviar.
-            // ==================================================
-            const chaveAddFigurinha =
-                `${message.guild.id}:${message.author.id}:${message.channelId}`;
-
-            const modoFigurinha =
-                addFigurinhaAtivo.get(chaveAddFigurinha);
-
-            if (modoFigurinha) {
-                if (Date.now() >= modoFigurinha.expiraEm) {
-                    addFigurinhaAtivo.delete(chaveAddFigurinha);
-                } else if (message.stickers?.size > 0) {
-                    const botMember = message.guild.members.me;
-
-                    if (
-                        !botMember ||
-                        !botMember.permissions.has(
-                            PermissionsBitField.Flags.ManageGuildExpressions
-                        )
-                    ) {
-                        await message.channel.send(
-                            '❌ Eu preciso da permissão **Gerenciar Expressões** para adicionar figurinhas.'
-                        ).catch(() => null);
-
-                        addFigurinhaAtivo.delete(chaveAddFigurinha);
-                        return;
-                    }
-
-                    const adicionadas = [];
-                    const ignoradas = [];
-                    const erros = [];
-
-                    for (const sticker of message.stickers.values()) {
-                        const resultado =
-                            await adicionarFigurinha(
-                                message.guild,
-                                sticker
-                            );
-
-                        if (resultado.criado) {
-                            adicionadas.push(resultado.criado.name);
-                        } else if (resultado.ignorado) {
-                            ignoradas.push(resultado.mensagem);
-                        } else if (resultado.mensagem) {
-                            erros.push(resultado.mensagem);
-                        }
-                    }
-
-                    const resposta = [];
-
-                    if (adicionadas.length) {
-                        resposta.push(
-                            `✅ **Figurinhas adicionadas:** ${adicionadas.map(nome => `**${nome}**`).join(', ')}`
-                        );
-                        modoFigurinha.adicionadas += adicionadas.length;
-                    }
-
-                    if (ignoradas.length) {
-                        resposta.push(
-                            `⚠️ **Ignoradas:** ${ignoradas.join(', ')}`
-                        );
-                    }
-
-                    if (erros.length) {
-                        resposta.push(
-                            `❌ **Erros:**\n${erros.join('\n')}`
-                        );
-                    }
-
-                    await message.reply(
-                        resposta.join('\n\n') ||
-                        '❌ Não consegui adicionar essa figurinha.'
-                    ).catch(() => null);
-
-                    return;
-                }
             }
 
             const guildId =
