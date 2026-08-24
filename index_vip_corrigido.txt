@@ -2190,14 +2190,21 @@ async function enviarPainelSuporte(guild, canal) {
 }
 
 async function criarTicketSuporte(interaction, tipo) {
-    const dadosTipo = TIPOS_SUPORTE[tipo];
-    if (!dadosTipo) {
-        return interaction.reply({ content: '❌ Tipo de atendimento inválido.', ephemeral: true });
-    }
+    try {
+        const dadosTipo = TIPOS_SUPORTE[tipo];
+        if (!dadosTipo) {
+            if (!interaction.replied && !interaction.deferred) {
+                return await interaction.reply({ content: '❌ Tipo de atendimento inválido.', ephemeral: true });
+            }
+            return await interaction.editReply({ content: '❌ Tipo de atendimento inválido.' });
+        }
 
-    await interaction.deferReply({ ephemeral: true });
+        // Confirma a interação imediatamente. O Discord exige resposta em poucos segundos.
+        if (!interaction.replied && !interaction.deferred) {
+            await interaction.deferReply({ ephemeral: true });
+        }
 
-    const guild = interaction.guild;
+        const guild = interaction.guild;
     const existente = guild.channels.cache.find(c =>
         c.type === ChannelType.GuildText &&
         typeof c.topic === 'string' &&
@@ -2300,7 +2307,25 @@ async function criarTicketSuporte(interaction, tipo) {
             content: `❌ Não consegui criar o ticket. Verifique se o bot tem **Gerenciar Canais** e acesso à categoria.\\n\\nErro: ${erro.message}`
         });
     }
+    } catch (erro) {
+        console.error('❌ Erro ao criar ticket de suporte:', erro);
+        try {
+            if (interaction.deferred || interaction.replied) {
+                await interaction.editReply({
+                    content: `❌ Não consegui criar o ticket. Verifique as permissões do bot e a categoria de tickets.\n\nErro: ${erro.message}`
+                });
+            } else {
+                await interaction.reply({
+                    content: `❌ Não consegui criar o ticket.\n\nErro: ${erro.message}`,
+                    ephemeral: true
+                });
+            }
+        } catch (erroResposta) {
+            console.error('❌ Erro ao responder a falha do ticket:', erroResposta);
+        }
+    }
 }
+
 
 async function fecharTicketSuporte(interaction) {
     const canal = interaction.channel;
@@ -3620,7 +3645,19 @@ client.on(
                 }
 
                 if (id.startsWith('suporte_abrir_')) {
-                    return criarTicketSuporte(interaction, id.replace('suporte_abrir_', ''));
+                    const tipo = id.replace('suporte_abrir_', '');
+                    try {
+                        if (!interaction.replied && !interaction.deferred) {
+                            await interaction.deferReply({ ephemeral: true });
+                        }
+                        return await criarTicketSuporte(interaction, tipo);
+                    } catch (erro) {
+                        console.error('❌ Erro no botão de ticket:', erro);
+                        if (interaction.deferred || interaction.replied) {
+                            return interaction.editReply({ content: `❌ Erro ao abrir o ticket: ${erro.message}` }).catch(() => null);
+                        }
+                        return interaction.reply({ content: `❌ Erro ao abrir o ticket: ${erro.message}`, ephemeral: true }).catch(() => null);
+                    }
                 }
 
                 if (id === 'suporte_fechar_ticket') {
@@ -6703,4 +6740,4 @@ http.createServer((req, res) => {
     res.end('Bot online!');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Servidor web rodando na porta ${PORT}`);
-	});
+});
