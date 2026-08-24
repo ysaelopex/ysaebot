@@ -2174,7 +2174,7 @@ async function enviarPainelSuporte(guild, canal) {
     const row = new ActionRowBuilder().addComponents(
         ...Object.entries(TIPOS_SUPORTE).map(([chave, item]) =>
             new ButtonBuilder()
-                .setCustomId(`suporte_abrir_${chave}`)
+                .setCustomId(`ticket_${chave}`)
                 .setLabel(item.nome)
                 .setEmoji(item.emoji)
                 .setStyle(chave === 'denuncias' ? ButtonStyle.Danger : ButtonStyle.Primary)
@@ -2189,15 +2189,29 @@ async function enviarPainelSuporte(guild, canal) {
     return canal.send({ embeds: [embed], components: [row] });
 }
 
+const ticketsSuporteEmCriacao = new Set();
+
 async function criarTicketSuporte(interaction, tipo) {
     const dadosTipo = TIPOS_SUPORTE[tipo];
     if (!dadosTipo) {
         return interaction.reply({ content: '❌ Tipo de atendimento inválido.', ephemeral: true });
     }
 
-    await interaction.deferReply({ ephemeral: true });
+    // Acknowledge imediatamente a interação para nunca deixar o Discord exibir
+    // “O aplicativo não respondeu a tempo” enquanto o canal é criado.
+    if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferReply({ ephemeral: true });
+    }
 
     const guild = interaction.guild;
+    const lock = `${guild.id}:${interaction.user.id}`;
+
+    if (ticketsSuporteEmCriacao.has(lock)) {
+        return interaction.editReply({ content: '⏳ Seu ticket já está sendo criado. Aguarde um momento.' });
+    }
+
+    ticketsSuporteEmCriacao.add(lock);
+
     const existente = guild.channels.cache.find(c =>
         c.type === ChannelType.GuildText &&
         typeof c.topic === 'string' &&
@@ -2205,21 +2219,25 @@ async function criarTicketSuporte(interaction, tipo) {
     );
 
     if (existente) {
+        ticketsSuporteEmCriacao.delete(lock);
         return interaction.editReply({ content: `❌ Você já possui um ticket aberto: ${existente}` });
     }
 
     const categoria = await guild.channels.fetch(CATEGORIA_TICKETS).catch(() => null);
     if (!categoria || categoria.type !== ChannelType.GuildCategory) {
+        ticketsSuporteEmCriacao.delete(lock);
         return interaction.editReply({ content: '❌ A categoria de tickets não foi encontrada ou não é uma categoria válida.' });
     }
 
     const suporte = guild.roles.cache.get(CARGO_SUPORTE) || await guild.roles.fetch(CARGO_SUPORTE).catch(() => null);
     if (!suporte) {
+        ticketsSuporteEmCriacao.delete(lock);
         return interaction.editReply({ content: '❌ O cargo de suporte configurado não foi encontrado.' });
     }
 
     const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
     if (!botMember || !botMember.permissions.has(PermissionsBitField.Flags.ManageChannels)) {
+        ticketsSuporteEmCriacao.delete(lock);
         return interaction.editReply({ content: '❌ O bot precisa da permissão **Gerenciar Canais** para criar tickets.' });
     }
 
@@ -2293,12 +2311,30 @@ async function criarTicketSuporte(interaction, tipo) {
             components: [fechar]
         });
 
+        ticketsSuporteEmCriacao.delete(lock);
         return interaction.editReply({ content: `✅ Seu ticket foi criado: ${canal}` });
     } catch (erro) {
+        ticketsSuporteEmCriacao.delete(lock);
         console.error('❌ Erro ao criar ticket de suporte:', erro);
-        return interaction.editReply({
-            content: `❌ Não consegui criar o ticket. Verifique se o bot tem **Gerenciar Canais** e acesso à categoria.\\n\\nErro: ${erro.message}`
+        console.error('Detalhes do ticket:', {
+            guildId: guild.id,
+            userId: interaction.user.id,
+            tipo,
+            categoriaId: CATEGORIA_TICKETS,
+            cargoSuporteId: CARGO_SUPORTE,
+            errorCode: erro?.code,
+            errorMessage: erro?.message
         });
+
+        const mensagem = `❌ Não consegui criar o ticket.\n` +
+            `Verifique se a categoria e o cargo configurados existem e se o bot tem **Gerenciar Canais**.\n\n` +
+            `Erro: ${erro?.message || 'erro desconhecido'}`;
+
+        if (interaction.deferred || interaction.replied) {
+            return interaction.editReply({ content: mensagem });
+        }
+
+        return interaction.reply({ content: mensagem, ephemeral: true });
     }
 }
 
@@ -3619,8 +3655,19 @@ client.on(
                     return;
                 }
 
+                // Tickets: aceita os customId novos e os antigos.
+                // O painel antigo usa ticket_compras/ticket_denuncias/ticket_suporte/ticket_parcerias.
+                if (id.startsWith('ticket_')) {
+                    const tipo = id.replace('ticket_', '');
+                    console.log(`🎫 INTERAÇÃO DE TICKET RECEBIDA: ${tipo} | ${interaction.user.tag} (${interaction.user.id})`);
+                    return await criarTicketSuporte(interaction, tipo);
+                }
+
+                // Compatibilidade com painéis que já foram enviados usando suporte_abrir_.
                 if (id.startsWith('suporte_abrir_')) {
-                    return criarTicketSuporte(interaction, id.replace('suporte_abrir_', ''));
+                    const tipo = id.replace('suporte_abrir_', '');
+                    console.log(`🎫 INTERAÇÃO DE TICKET RECEBIDA: ${tipo} | ${interaction.user.tag} (${interaction.user.id})`);
+                    return await criarTicketSuporte(interaction, tipo);
                 }
 
                 if (id === 'suporte_fechar_ticket') {
