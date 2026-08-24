@@ -51,6 +51,7 @@ const CARGO_SUPORTE = '1537432685075496980';
 // ======================================================
 const CANAL_VIP = '1538611994926514198';
 const CATEGORIA_TICKETS = '1538290771843752067';
+const IMAGEM_PAINEL_SUPORTE = ''; // Cole aqui a URL da nova imagem do painel de suporte quando quiser trocar.
 
 const VIP_COMPRAS = {
     prata: { nome: 'VIP Prata', cargoId: '1538379784827043880', xp: 30000, preco: 15, emoji: '💎' },
@@ -69,6 +70,39 @@ const respostas8Ball = [
 ];
 
 const CARGO_AUTOROLE = '1537433971367874610';
+
+
+// ======================================================
+// ADICIONAR CARGO COM VERIFICAÇÃO DE PERMISSÕES
+// ======================================================
+async function adicionarCargoSeguro(member, role, motivo = 'Cargo atribuído pelo bot') {
+    const botMember = member.guild.members.me ?? await member.guild.members.fetchMe().catch(() => null);
+    if (!botMember) throw new Error('Não consegui localizar o membro do bot no servidor.');
+
+    if (!botMember.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
+        throw new Error('O bot não possui a permissão **Gerenciar Cargos**.');
+    }
+
+    if (role.managed) {
+        throw new Error('Esse cargo é gerenciado por uma integração e não pode ser atribuído manualmente.');
+    }
+
+    if (role.position >= botMember.roles.highest.position) {
+        throw new Error('O cargo que tentei adicionar está acima ou no mesmo nível do maior cargo do bot. Mova o cargo do bot para cima dele em Configurações do Servidor > Cargos.');
+    }
+
+    if (member.roles.cache.has(role.id)) return role;
+
+    try {
+        await member.roles.add(role, motivo);
+        return role;
+    } catch (error) {
+        if (error?.code === 50013) {
+            throw new Error('O Discord recusou a atribuição do cargo (50013 - Missing Permissions). Verifique **Gerenciar Cargos** e a hierarquia dos cargos.');
+        }
+        throw error;
+    }
+}
 
 // ======================================================
 // CANAIS DOS COMANDOS
@@ -1129,7 +1163,8 @@ async function criarCargoPersonalizado(
     // DAR O CARGO AO DONO
     // ==================================================
 
-    await member.roles.add(
+    await adicionarCargoSeguro(
+        member,
         cargo,
         `Cargo personalizado VIP ${vip.nome}`
     );
@@ -2085,6 +2120,206 @@ Clique em um botão para abrir um ticket privado. Dentro do ticket você escolhe
     }
 }
 
+// ======================================================
+// PAINEL DE SUPORTE / TICKETS
+// ======================================================
+const TIPOS_SUPORTE = {
+    compras: { nome: 'Compras', emoji: '🛒', descricao: 'Atendimento para compras e pagamentos.' },
+    parcerias: { nome: 'Parcerias', emoji: '🤝', descricao: 'Solicitações e assuntos de parcerias.' },
+    denuncias: { nome: 'Denúncias', emoji: '🚨', descricao: 'Envie uma denúncia para a equipe.' },
+    suporte: { nome: 'Suporte', emoji: '🛠️', descricao: 'Ajuda geral e problemas no servidor.' }
+};
+
+function nomeSeguroTicket(texto) {
+    return texto
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\\u0300-\\u036f]/g, '')
+        .replace(/[^a-z0-9-]/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '')
+        .slice(0, 50);
+}
+
+async function enviarPainelSuporte(guild, canal) {
+    if (!canal || !canal.isTextBased()) {
+        throw new Error('O canal precisa ser um canal de texto.');
+    }
+
+    const mensagens = await canal.messages.fetch({ limit: 50 }).catch(() => null);
+    const painelExistente = mensagens?.find(m =>
+        m.author.id === client.user.id &&
+        m.embeds.some(e => e.title === '🎫 CENTRAL DE ATENDIMENTO')
+    );
+
+    const embed = new EmbedBuilder()
+        .setTitle('🎫 CENTRAL DE ATENDIMENTO')
+        .setDescription(
+            'Precisa de ajuda? Escolha uma opção abaixo para abrir seu ticket privado.\\n\\n' +
+            '🛒 **Compras** — atendimento para compras.\\n' +
+            '🤝 **Parcerias** — assuntos de parcerias.\\n' +
+            '🚨 **Denúncias** — fale com a equipe sobre uma denúncia.\\n' +
+            '🛠️ **Suporte** — ajuda geral.\\n\\n' +
+            'Seu ticket ficará visível somente para você e para a equipe de suporte.'
+        )
+        .setFooter({ text: 'Raven • Central de Atendimento' })
+        .setTimestamp();
+
+    if (IMAGEM_PAINEL_SUPORTE) {
+        embed.setImage(IMAGEM_PAINEL_SUPORTE);
+    } else {
+        embed.setThumbnail(guild.iconURL({ extension: 'png', size: 256 }) || null);
+    }
+
+    const row = new ActionRowBuilder().addComponents(
+        ...Object.entries(TIPOS_SUPORTE).map(([chave, item]) =>
+            new ButtonBuilder()
+                .setCustomId(`suporte_abrir_${chave}`)
+                .setLabel(item.nome)
+                .setEmoji(item.emoji)
+                .setStyle(chave === 'denuncias' ? ButtonStyle.Danger : ButtonStyle.Primary)
+        )
+    );
+
+    if (painelExistente) {
+        await painelExistente.edit({ embeds: [embed], components: [row] });
+        return painelExistente;
+    }
+
+    return canal.send({ embeds: [embed], components: [row] });
+}
+
+async function criarTicketSuporte(interaction, tipo) {
+    const dadosTipo = TIPOS_SUPORTE[tipo];
+    if (!dadosTipo) {
+        return interaction.reply({ content: '❌ Tipo de atendimento inválido.', ephemeral: true });
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const guild = interaction.guild;
+    const existente = guild.channels.cache.find(c =>
+        c.type === ChannelType.GuildText &&
+        typeof c.topic === 'string' &&
+        c.topic.startsWith(`support-ticket:${interaction.user.id}:`)
+    );
+
+    if (existente) {
+        return interaction.editReply({ content: `❌ Você já possui um ticket aberto: ${existente}` });
+    }
+
+    const categoria = await guild.channels.fetch(CATEGORIA_TICKETS).catch(() => null);
+    if (!categoria || categoria.type !== ChannelType.GuildCategory) {
+        return interaction.editReply({ content: '❌ A categoria de tickets não foi encontrada ou não é uma categoria válida.' });
+    }
+
+    const suporte = guild.roles.cache.get(CARGO_SUPORTE) || await guild.roles.fetch(CARGO_SUPORTE).catch(() => null);
+    if (!suporte) {
+        return interaction.editReply({ content: '❌ O cargo de suporte configurado não foi encontrado.' });
+    }
+
+    const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
+    if (!botMember || !botMember.permissions.has(PermissionsBitField.Flags.ManageChannels)) {
+        return interaction.editReply({ content: '❌ O bot precisa da permissão **Gerenciar Canais** para criar tickets.' });
+    }
+
+    const nome = `${tipo}-${nomeSeguroTicket(interaction.user.username)}-${interaction.user.id.slice(-4)}`;
+
+    try {
+        const canal = await guild.channels.create({
+            name: nome,
+            type: ChannelType.GuildText,
+            parent: categoria.id,
+            topic: `support-ticket:${interaction.user.id}:${tipo}`,
+            permissionOverwrites: [
+                {
+                    id: guild.roles.everyone.id,
+                    deny: [PermissionsBitField.Flags.ViewChannel]
+                },
+                {
+                    id: interaction.user.id,
+                    allow: [
+                        PermissionsBitField.Flags.ViewChannel,
+                        PermissionsBitField.Flags.SendMessages,
+                        PermissionsBitField.Flags.ReadMessageHistory,
+                        PermissionsBitField.Flags.AttachFiles
+                    ]
+                },
+                {
+                    id: suporte.id,
+                    allow: [
+                        PermissionsBitField.Flags.ViewChannel,
+                        PermissionsBitField.Flags.SendMessages,
+                        PermissionsBitField.Flags.ReadMessageHistory,
+                        PermissionsBitField.Flags.ManageMessages
+                    ]
+                },
+                {
+                    id: client.user.id,
+                    allow: [
+                        PermissionsBitField.Flags.ViewChannel,
+                        PermissionsBitField.Flags.SendMessages,
+                        PermissionsBitField.Flags.ReadMessageHistory,
+                        PermissionsBitField.Flags.ManageChannels,
+                        PermissionsBitField.Flags.ManageMessages
+                    ]
+                }
+            ]
+        });
+
+        const embed = new EmbedBuilder()
+            .setTitle(`${dadosTipo.emoji} ${dadosTipo.nome}`)
+            .setDescription(
+                `${dadosTipo.descricao}\\n\\n` +
+                `Olá ${interaction.user}! Explique seu caso com o máximo de detalhes possível.\\n` +
+                `A equipe responderá neste ticket assim que puder.`
+            )
+            .setFooter({ text: 'Raven • Atendimento' })
+            .setTimestamp();
+
+        if (IMAGEM_PAINEL_SUPORTE) embed.setImage(IMAGEM_PAINEL_SUPORTE);
+
+        const fechar = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('suporte_fechar_ticket')
+                .setLabel('Fechar ticket')
+                .setEmoji('🔒')
+                .setStyle(ButtonStyle.Danger)
+        );
+
+        await canal.send({
+            content: `${interaction.user} <@&${suporte.id}>`,
+            embeds: [embed],
+            components: [fechar]
+        });
+
+        return interaction.editReply({ content: `✅ Seu ticket foi criado: ${canal}` });
+    } catch (erro) {
+        console.error('❌ Erro ao criar ticket de suporte:', erro);
+        return interaction.editReply({
+            content: `❌ Não consegui criar o ticket. Verifique se o bot tem **Gerenciar Canais** e acesso à categoria.\\n\\nErro: ${erro.message}`
+        });
+    }
+}
+
+async function fecharTicketSuporte(interaction) {
+    const canal = interaction.channel;
+    if (!canal?.topic?.startsWith('support-ticket:')) return false;
+
+    const ehEquipe = interaction.member?.roles?.cache?.has(CARGO_SUPORTE) ||
+        interaction.member?.permissions?.has(PermissionsBitField.Flags.ManageChannels);
+
+    const donoId = canal.topic.split(':')[1];
+    if (interaction.user.id !== donoId && !ehEquipe) {
+        await interaction.reply({ content: '❌ Apenas o dono do ticket ou a equipe pode fechá-lo.', ephemeral: true });
+        return true;
+    }
+
+    await interaction.reply({ content: '🔒 Ticket encerrado. Este canal será excluído em 3 segundos.' });
+    setTimeout(() => canal.delete('Ticket de suporte encerrado').catch(() => null), 3000);
+    return true;
+}
+
 const ticketsEmCriacao = new Set();
 
 async function criarTicketVIP(interaction, chave) {
@@ -2235,7 +2470,7 @@ async function entregarVIP(guild, userId, chave) {
     const role = await guild.roles.fetch(vip.cargoId);
     if (!role) throw new Error('Cargo VIP não encontrado.');
     if (role.position >= guild.members.me.roles.highest.position) throw new Error('O cargo VIP está acima do cargo do bot.');
-    await member.roles.add(role, `Compra ${vip.nome}`);
+    await adicionarCargoSeguro(member, role, `Compra ${vip.nome}`);
     iniciarContagemVip(guild.id, userId, chave);
     return role;
 }
@@ -2823,6 +3058,7 @@ const comandos = [
     new SlashCommandBuilder().setName('rankingdiversao').setDescription('Mostra o ranking de diversão.'),
 
     new SlashCommandBuilder().setName('vip-painel').setDescription('Envia/atualiza o painel de compras VIP no canal VIP.'),
+    new SlashCommandBuilder().setName('suporte-painel').setDescription('Envia/atualiza o painel de Compras, Parcerias, Denúncias e Suporte no canal atual.'),
 
     new SlashCommandBuilder()
         .setName('stop')
@@ -2967,13 +3203,20 @@ client.on(
                     `❌ Não foi possível entregar o cargo automático ${CARGO_AUTOROLE}: o cargo do bot precisa estar acima dele na hierarquia.`
                 );
             } else if (!member.roles.cache.has(CARGO_AUTOROLE)) {
-                await member.roles.add(
-                    cargoAutomatico,
-                    'Cargo automático ao entrar no servidor'
-                );
-                console.log(
-                    `✅ Cargo automático ${CARGO_AUTOROLE} entregue para ${member.user.tag}.`
-                );
+                try {
+                    await adicionarCargoSeguro(
+                        member,
+                        cargoAutomatico,
+                        'Cargo automático ao entrar no servidor'
+                    );
+                    console.log(
+                        `✅ Cargo automático ${CARGO_AUTOROLE} entregue para ${member.user.tag}.`
+                    );
+                } catch (erro) {
+                    console.log(
+                        `⚠️ Não foi possível entregar o cargo automático ${CARGO_AUTOROLE} para ${member.user.tag}: ${erro.message}`
+                    );
+                }
             }
 
             const raidAtivo =
@@ -3376,6 +3619,14 @@ client.on(
                     return;
                 }
 
+                if (id.startsWith('suporte_abrir_')) {
+                    return criarTicketSuporte(interaction, id.replace('suporte_abrir_', ''));
+                }
+
+                if (id === 'suporte_fechar_ticket') {
+                    return fecharTicketSuporte(interaction);
+                }
+
                 if (id.startsWith('vip_comprar_')) {
                     return criarTicketVIP(interaction, id.replace('vip_comprar_', ''));
                 }
@@ -3657,6 +3908,18 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                     adicionarXP(interaction.guild.id, alvo.id, qtd); return interaction.reply(`💸 ${interaction.user} transferiu **${qtd.toLocaleString('pt-BR')} XP** para ${alvo}.`);
                 }
                 if (comando === 'loja') return interaction.reply({ embeds:[new EmbedBuilder().setTitle('🛒 Loja Raven').setDescription(Object.values(VIP_COMPRAS).map(v=>`${v.emoji} **${v.nome}** — ${v.xp.toLocaleString('pt-BR')} XP / R$ ${v.preco.toFixed(2).replace('.',',')}`).join('\n')).addFields({name:'Como comprar',value:'Use `/comprar item` para compra direta com XP ou use o painel VIP para abrir um ticket e escolher XP/Pix.'})] });
+
+            if (comando === 'suporte-painel') {
+                if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+                    return interaction.reply({ content: '❌ Você precisa da permissão **Gerenciar Servidor** para publicar o painel de suporte.', ephemeral: true });
+                }
+                try {
+                    await enviarPainelSuporte(interaction.guild, interaction.channel);
+                    return interaction.reply({ content: '✅ Painel de suporte enviado/atualizado neste canal.', ephemeral: true });
+                } catch (erro) {
+                    return interaction.reply({ content: `❌ Não consegui enviar o painel: ${erro.message}`, ephemeral: true });
+                }
+            }
                 if (comando === 'comprar') {
                     const item=interaction.options.getString('item').replace('vip_',''); const vip=VIP_COMPRAS[item];
                     if (!vip) return interaction.reply({content:'❌ Item inválido.',ephemeral:true});
@@ -5900,9 +6163,18 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
 
                 }
 
-                await alvo.roles.add(
-                    cargo
-                );
+                try {
+                    await adicionarCargoSeguro(
+                        alvo,
+                        cargo,
+                        `Cargo adicionado por ${interaction.user.tag}`
+                    );
+                } catch (erro) {
+                    return interaction.reply({
+                        content: `❌ Não consegui adicionar o cargo.\n\n${erro.message}`,
+                        ephemeral: true
+                    });
+                }
 
                 return interaction.reply(
                     `✅ O cargo ${cargo} foi adicionado a ${alvo}.`
