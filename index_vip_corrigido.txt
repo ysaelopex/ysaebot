@@ -2190,6 +2190,15 @@ async function enviarPainelSuporte(guild, canal) {
 }
 
 async function criarTicketSuporte(interaction, tipo) {
+    console.log(
+        `🎫 Iniciando ticket | tipo: ${tipo} | usuário: ${interaction.user.tag} | customId: ${interaction.customId}`
+    );
+
+    // Responde imediatamente ao Discord, antes de qualquer busca/criação.
+    if (!interaction.replied && !interaction.deferred) {
+        await interaction.deferReply({ ephemeral: true });
+    }
+
     const dadosTipo = TIPOS_SUPORTE[tipo];
 
     if (!dadosTipo) {
@@ -2200,11 +2209,6 @@ async function criarTicketSuporte(interaction, tipo) {
     }
 
     try {
-        // Responde IMEDIATAMENTE ao Discord antes de fazer qualquer operação demorada.
-        if (!interaction.replied && !interaction.deferred) {
-            await interaction.deferReply({ ephemeral: true });
-        }
-
         const guild = interaction.guild;
         if (!guild) {
             return interaction.editReply({ content: '❌ Não consegui identificar o servidor.' });
@@ -3599,6 +3603,52 @@ client.on(
                 const id = interaction.customId;
 
                 // ==================================================
+                // DIAGNÓSTICO DOS BOTÕES
+                // ==================================================
+                console.log(
+                    `🔘 Botão clicado | customId: ${id} | usuário: ${interaction.user.tag} | canal: ${interaction.channelId}`
+                );
+
+                // Alguns painéis antigos podem ter sido criados com customId
+                // diferente do painel atual. Se o botão estiver dentro da
+                // Central de Atendimento, usamos também o texto do botão.
+                const textoBotao = String(
+                    interaction.component?.label || ''
+                ).trim().toLowerCase();
+
+                const mensagemPainel = interaction.message;
+                const tituloPainel = String(
+                    mensagemPainel?.embeds?.[0]?.title || ''
+                ).toLowerCase();
+
+                const ehPainelTickets =
+                    tituloPainel.includes('central de atendimento') ||
+                    tituloPainel.includes('central de atendimento');
+
+                if (ehPainelTickets && textoBotao) {
+                    const tipoPorTexto = {
+                        'compras': 'compras',
+                        'suporte': 'suporte',
+                        'denúncia': 'denuncias',
+                        'denuncia': 'denuncias',
+                        'parceria': 'parcerias'
+                    };
+
+                    const tipoDetectado = tipoPorTexto[textoBotao];
+
+                    if (tipoDetectado) {
+                        console.log(
+                            `🎫 Ticket detectado pelo texto do botão: ${textoBotao} -> ${tipoDetectado}`
+                        );
+
+                        return await criarTicketSuporte(
+                            interaction,
+                            tipoDetectado
+                        );
+                    }
+                }
+
+                // ==================================================
                 // PEDIDOS DE CASAMENTO
                 // ==================================================
                 if (id.startsWith('casamento_aceitar_') || id.startsWith('casamento_recusar_')) {
@@ -3668,11 +3718,22 @@ client.on(
                 }
 
                 if (id === 'suporte_fechar_ticket') {
-                    return fecharTicketSuporte(interaction);
+                    console.log('🔒 Botão de fechar ticket detectado.');
+                    return await fecharTicketSuporte(interaction);
                 }
 
                 if (id.startsWith('vip_comprar_')) {
                     return await criarTicketVIP(interaction, id.replace('vip_comprar_', ''));
+                }
+
+                if (
+                    !id.startsWith('suporte_') &&
+                    !id.startsWith('casamento_') &&
+                    !id.startsWith('vip_')
+                ) {
+                    console.warn(
+                        `⚠️ Botão não reconhecido: ${id}`
+                    );
                 }
 
                 if (id.startsWith('vip_pagar_xp_')) {
