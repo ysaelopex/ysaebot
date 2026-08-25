@@ -2191,41 +2191,70 @@ async function enviarPainelSuporte(guild, canal) {
 
 async function criarTicketSuporte(interaction, tipo) {
     const dadosTipo = TIPOS_SUPORTE[tipo];
+
     if (!dadosTipo) {
-        return interaction.reply({ content: '❌ Tipo de atendimento inválido.', ephemeral: true });
+        if (!interaction.replied && !interaction.deferred) {
+            return interaction.reply({ content: '❌ Tipo de atendimento inválido.', ephemeral: true });
+        }
+        return;
     }
-
-    await interaction.deferReply({ ephemeral: true });
-
-    const guild = interaction.guild;
-    const existente = guild.channels.cache.find(c =>
-        c.type === ChannelType.GuildText &&
-        typeof c.topic === 'string' &&
-        c.topic.startsWith(`support-ticket:${interaction.user.id}:`)
-    );
-
-    if (existente) {
-        return interaction.editReply({ content: `❌ Você já possui um ticket aberto: ${existente}` });
-    }
-
-    const categoria = await guild.channels.fetch(CATEGORIA_TICKETS).catch(() => null);
-    if (!categoria || categoria.type !== ChannelType.GuildCategory) {
-        return interaction.editReply({ content: '❌ A categoria de tickets não foi encontrada ou não é uma categoria válida.' });
-    }
-
-    const suporte = guild.roles.cache.get(CARGO_SUPORTE) || await guild.roles.fetch(CARGO_SUPORTE).catch(() => null);
-    if (!suporte) {
-        return interaction.editReply({ content: '❌ O cargo de suporte configurado não foi encontrado.' });
-    }
-
-    const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
-    if (!botMember || !botMember.permissions.has(PermissionsBitField.Flags.ManageChannels)) {
-        return interaction.editReply({ content: '❌ O bot precisa da permissão **Gerenciar Canais** para criar tickets.' });
-    }
-
-    const nome = `${tipo}-${nomeSeguroTicket(interaction.user.username)}-${interaction.user.id.slice(-4)}`;
 
     try {
+        // Responde IMEDIATAMENTE ao Discord antes de fazer qualquer operação demorada.
+        if (!interaction.replied && !interaction.deferred) {
+            await interaction.deferReply({ ephemeral: true });
+        }
+
+        const guild = interaction.guild;
+        if (!guild) {
+            return interaction.editReply({ content: '❌ Não consegui identificar o servidor.' });
+        }
+
+        const existente = guild.channels.cache.find(c =>
+            c.type === ChannelType.GuildText &&
+            typeof c.topic === 'string' &&
+            c.topic.startsWith(`support-ticket:${interaction.user.id}:`)
+        );
+
+        if (existente) {
+            return interaction.editReply({
+                content: `❌ Você já possui um ticket aberto: ${existente}`
+            });
+        }
+
+        // Busca a categoria e valida se ela realmente existe.
+        const categoria = await guild.channels.fetch(CATEGORIA_TICKETS).catch(() => null);
+        if (!categoria || categoria.type !== ChannelType.GuildCategory) {
+            return interaction.editReply({
+                content: `❌ A categoria de tickets não foi encontrada.\n\nID configurado: \`${CATEGORIA_TICKETS}\``
+            });
+        }
+
+        // Busca o cargo de suporte.
+        const suporte = guild.roles.cache.get(CARGO_SUPORTE) ||
+            await guild.roles.fetch(CARGO_SUPORTE).catch(() => null);
+
+        if (!suporte) {
+            return interaction.editReply({
+                content: `❌ O cargo de suporte não foi encontrado.\n\nID configurado: \`${CARGO_SUPORTE}\``
+            });
+        }
+
+        // Atualiza o membro do bot para garantir que as permissões estejam corretas.
+        const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
+        if (!botMember) {
+            return interaction.editReply({ content: '❌ Não consegui localizar o bot dentro do servidor.' });
+        }
+
+        if (!botMember.permissions.has(PermissionsBitField.Flags.ManageChannels)) {
+            return interaction.editReply({
+                content: '❌ O bot precisa da permissão **Gerenciar Canais** para criar tickets.'
+            });
+        }
+
+        const nomeBase = nomeSeguroTicket(interaction.user.username);
+        const nome = `${tipo}-${nomeBase || 'usuario'}-${interaction.user.id.slice(-4)}`.slice(0, 100);
+
         const canal = await guild.channels.create({
             name: nome,
             type: ChannelType.GuildText,
@@ -2270,14 +2299,16 @@ async function criarTicketSuporte(interaction, tipo) {
         const embed = new EmbedBuilder()
             .setTitle(`${dadosTipo.emoji} ${dadosTipo.nome}`)
             .setDescription(
-                `${dadosTipo.descricao}\\n\\n` +
-                `Olá ${interaction.user}! Explique seu caso com o máximo de detalhes possível.\\n` +
+                `${dadosTipo.descricao}\n\n` +
+                `Olá ${interaction.user}! Explique seu caso com o máximo de detalhes possível.\n` +
                 `A equipe responderá neste ticket assim que puder.`
             )
             .setFooter({ text: 'Raven • Atendimento' })
             .setTimestamp();
 
-        if (IMAGEM_PAINEL_SUPORTE) embed.setImage(IMAGEM_PAINEL_SUPORTE);
+        if (IMAGEM_PAINEL_SUPORTE) {
+            embed.setImage(IMAGEM_PAINEL_SUPORTE);
+        }
 
         const fechar = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
@@ -2294,11 +2325,24 @@ async function criarTicketSuporte(interaction, tipo) {
         });
 
         return interaction.editReply({ content: `✅ Seu ticket foi criado: ${canal}` });
+
     } catch (erro) {
         console.error('❌ Erro ao criar ticket de suporte:', erro);
-        return interaction.editReply({
-            content: `❌ Não consegui criar o ticket. Verifique se o bot tem **Gerenciar Canais** e acesso à categoria.\\n\\nErro: ${erro.message}`
-        });
+
+        const mensagem =
+            erro?.code === 50013
+                ? '❌ O Discord recusou a criação do canal. Verifique se o bot possui **Gerenciar Canais** e se o cargo do bot está acima do necessário.'
+                : `❌ Não consegui criar o ticket.\n\nErro: ${erro?.message || erro}`;
+
+        try {
+            if (interaction.deferred || interaction.replied) {
+                return await interaction.editReply({ content: mensagem });
+            }
+
+            return await interaction.reply({ content: mensagem, ephemeral: true });
+        } catch (erroResposta) {
+            console.error('❌ Não consegui responder à interação do ticket:', erroResposta);
+        }
     }
 }
 
@@ -3620,7 +3664,7 @@ client.on(
                 }
 
                 if (id.startsWith('suporte_abrir_')) {
-                    return criarTicketSuporte(interaction, id.replace('suporte_abrir_', ''));
+                    return await criarTicketSuporte(interaction, id.replace('suporte_abrir_', ''));
                 }
 
                 if (id === 'suporte_fechar_ticket') {
@@ -3628,7 +3672,7 @@ client.on(
                 }
 
                 if (id.startsWith('vip_comprar_')) {
-                    return criarTicketVIP(interaction, id.replace('vip_comprar_', ''));
+                    return await criarTicketVIP(interaction, id.replace('vip_comprar_', ''));
                 }
 
                 if (id.startsWith('vip_pagar_xp_')) {
@@ -6318,18 +6362,21 @@ Depois de pagar, envie o comprovante neste ticket e aguarde a equipe.`, componen
                 erro
             );
 
-            if (
-                interaction.replied ||
-                interaction.deferred
-            ) {
-                return;
-            }
+            try {
+                if (interaction.deferred || interaction.replied) {
+                    await interaction.editReply({
+                        content: '❌ Ocorreu um erro ao executar essa interação.'
+                    }).catch(() => null);
+                    return;
+                }
 
-            await interaction.reply({
-                content:
-                    '❌ Ocorreu um erro ao executar esse comando.',
-                ephemeral: true
-            });
+                await interaction.reply({
+                    content: '❌ Ocorreu um erro ao executar essa interação.',
+                    ephemeral: true
+                });
+            } catch (erroResposta) {
+                console.error('❌ Não foi possível responder à interação:', erroResposta);
+            }
 
         }
 
